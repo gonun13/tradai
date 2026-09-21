@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+# Keeps the named volume (tradai-data) so portfolio/cache survive.
+# Pass -v to also remove volumes: bin/down -v
+exec docker compose down "$@"

@@ -1,0 +1,231 @@
+<script setup lang="ts">
+import type { ConversationTurn, Recommendation } from '~/composables/useHoldingsApi'
+
+const route = useRoute()
+const api = useHoldingsApi()
+const { message: opsMessage, error: opsError } = useGlobalOps()
+
+const symbol = computed(() => {
+  const raw = route.params.symbol
+  const value = Array.isArray(raw) ? raw[0] : raw
+  return decodeURIComponent(String(value || ''))
+})
+
+const { data, pending, error } = await useAsyncData(
+  () => `advisory-log-${symbol.value}`,
+  () => api.latestRun(),
+  { watch: [symbol] },
+)
+
+const recs = computed(() => {
+  const all = data.value?.recommendations ?? []
+  return all.filter((r) => r.symbol === symbol.value)
+})
+
+const primary = computed(() => recs.value[0] ?? null)
+
+const conversation = computed((): ConversationTurn[] => {
+  return (primary.value?.conversation as ConversationTurn[] | null) ?? []
+})
+
+function jevConfidence(r: Recommendation) {
+  const c = r.confidence ?? r.jev?.confidence
+  return typeof c === 'number' ? c.toFixed(2) : null
+}
+
+function lensLine(recsList: Recommendation[]) {
+  const lenses = recsList[0]?.jev_lenses
+  if (!lenses) {
+    return null
+  }
+  // Internal signal names only — the thesis reasoning behind them stays off-screen.
+  const display: Record<string, string> = { thesis: 'fundamentals', news: 'news', technicals: 'technicals' }
+  const parts: string[] = []
+  for (const key of ['thesis', 'news', 'technicals'] as const) {
+    const a = lenses[key]?.action
+    if (a) {
+      parts.push(`${display[key]}:${a}`)
+    }
+  }
+  return parts.length ? parts.join(' · ') : null
+}
+
+function turnAnswerDetails(turn: ConversationTurn) {
+  if (!turn.answers) {
+    return []
+  }
+  return Object.entries(turn.answers).map(([horizon, v]) => ({
+    horizon,
+    action: v.action || '?',
+    extras: Object.entries(v.payload || {}).filter(
+      ([k]) => !['type', 'choice', 'answer', 'value'].includes(k),
+    ),
+  }))
+}
+
+const contextHolding = computed(() => {
+  const holdings = data.value?.run?.context?.holdings ?? []
+  return holdings.find((h) => h.symbol === symbol.value) ?? null
+})
+
+// 0019: the same transcript serves both books, so a tracked name resolves here instead.
+const contextTracked = computed(() => {
+  const tracked = data.value?.run?.context?.tracked ?? []
+  return tracked.find((t) => t.symbol === symbol.value) ?? null
+})
+
+const book = computed<'portfolio' | 'tracker'>(() =>
+  contextTracked.value && !contextHolding.value ? 'tracker' : 'portfolio',
+)
+
+// Which of the two profiles (0019) was actually applied to this symbol. `context.mandates`
+// carries the resolved text per book — defaults already substituted, so this shows what the
+// models were really given rather than going blank when the operator hasn't written a half.
+// Runs from before 0019 only have the single `mandate` string.
+const mandate = computed(() => {
+  const ctx = data.value?.run?.context
+  if (!ctx) {
+    return null
+  }
+  return ctx.mandates?.[book.value] ?? ctx.mandate ?? null
+})
+
+const models = computed(() => {
+  const m = data.value?.run?.models
+  return (m ?? null) as {
+    claude?: { enabled?: boolean; binary?: string }
+    jev?: { enabled?: boolean; model?: string }
+  } | null
+})
+
+watchEffect(() => {
+  useHead({ title: symbol.value ? `Log — ${symbol.value}` : 'Log' })
+})
+</script>
+
+<template>
+  <div>
+    <p class="tag">Claude ↔ Jev log — {{ symbol || '…' }}</p>
+
+    <p v-if="opsMessage" class="ok">{{ opsMessage }}</p>
+    <p v-if="opsError" class="bad">{{ opsError }}</p>
+    <p v-if="pending" class="mute">Loading transcript…</p>
+    <p v-else-if="error" class="bad">{{ error }}</p>
+    <p v-else-if="!primary" class="mute">No recommendation found for {{ symbol }} on the latest run.</p>
+
+    <template v-else>
+      <section class="panel">
+        <div class="list-head">
+          <h1>
+            {{ symbol }}
+            <span class="mute">{{ primary.instrument_name }}</span>
+          </h1>
+          <p v-if="data?.run" class="mute">
+            Run #{{ data.run.id }} · {{ data.run.status }} · {{ data.run.started_at }}
+          </p>
+          <p v-if="models" class="sub">
+            Claude {{ models.claude?.enabled ? 'enabled' : 'disabled' }}<template v-if="models.claude?.binary"> ({{ models.claude.binary }})</template>
+            · Jev {{ models.jev?.model || '—' }} ({{ models.jev?.enabled ? 'enabled' : 'disabled' }})
+          </p>
+        </div>
+        <p class="tech">
+          <span v-for="r in recs" :key="r.id" class="pill" :data-action="r.action">
+            {{ r.horizon }} {{ r.action }}<template v-if="jevConfidence(r)"> · conf {{ jevConfidence(r) }}</template>
+          </span>
+        </p>
+        <p v-if="lensLine(recs)" class="sub lenses">supporting {{ lensLine(recs) }}</p>
+      </section>
+
+      <section v-if="mandate" class="panel">
+        <h1>Mandate used for this run</h1>
+        <p class="mute">
+          The
+          <strong>{{ book === 'tracker' ? 'investor profile' : 'portfolio mandate' }}</strong>
+          actually sent to Claude and Jev for run #{{ data?.run?.id }} — the Setup page value
+          may have changed since.
+        </p>
+        <p class="rationale">{{ mandate }}</p>
+      </section>
+
+      <section v-if="contextTracked && !contextHolding" class="panel">
+        <h1>Ingested for {{ symbol }}</h1>
+        <p class="mute">
+          Tracked, not owned — no position, and no news is fetched for the tracker, so the news
+          lens was skipped for this name.
+        </p>
+        <div class="ctx">
+          <p class="tech">
+            tracked since {{ (contextTracked.added_at || '').slice(0, 10) }}
+            <template v-if="contextTracked.price_eur != null"> · {{ contextTracked.price_eur }} EUR</template>
+          </p>
+          <p v-if="contextTracked.quote" class="sub">
+            quote {{ contextTracked.quote.price }} {{ contextTracked.quote.currency }}
+            as of {{ contextTracked.quote.as_of }}
+          </p>
+          <p v-if="contextTracked.technicals" class="tech">
+            <span v-for="(v, k) in contextTracked.technicals" :key="k">{{ k }}: {{ v }} </span>
+          </p>
+          <p v-if="contextTracked.note" class="rationale">Your note: {{ contextTracked.note }}</p>
+        </div>
+      </section>
+
+      <section v-if="contextHolding" class="panel">
+        <h1>Ingested for {{ symbol }}</h1>
+        <p class="mute">What Claude and Jev actually saw for this run, not live data.</p>
+        <div class="ctx">
+          <p class="tech">
+            qty {{ contextHolding.quantity }} · avg cost {{ contextHolding.avg_cost }}
+            <template v-if="contextHolding.market_value_eur != null"> · mv {{ contextHolding.market_value_eur }} EUR</template>
+            <template v-if="contextHolding.pnl_pct != null"> · pnl {{ contextHolding.pnl_pct }}%</template>
+            <template v-if="contextHolding.weight_pct != null"> · wgt {{ contextHolding.weight_pct }}%</template>
+            <template v-if="contextHolding.weight_cost_pct != null"> (cost wgt {{ contextHolding.weight_cost_pct }}%)</template>
+            <template v-if="contextHolding.held_days != null"> · held {{ contextHolding.held_days }}d</template>
+          </p>
+          <p v-if="contextHolding.quote" class="sub">
+            quote {{ contextHolding.quote.price }} {{ contextHolding.quote.currency }}
+            as of {{ contextHolding.quote.as_of }} ({{ contextHolding.quote.source }})
+          </p>
+          <p v-if="contextHolding.technicals" class="tech">
+            <span v-for="(v, k) in contextHolding.technicals" :key="k">{{ k }}: {{ v }} </span>
+          </p>
+          <ul v-if="contextHolding.news?.length" class="news">
+            <li v-for="(n, i) in contextHolding.news" :key="i">
+              <a v-if="n.url" :href="n.url" target="_blank" rel="noopener noreferrer">{{ n.title }}</a>
+              <span v-else>{{ n.title }}</span>
+              <span class="sub"> · {{ n.source || 'news' }} · {{ n.published_at }}</span>
+            </li>
+          </ul>
+          <p v-if="contextHolding.thesis" class="rationale">
+            Thesis (v{{ contextHolding.thesis.version }}): {{ contextHolding.thesis.text }}
+          </p>
+        </div>
+      </section>
+
+      <section class="panel log-panel" aria-label="Conversation log">
+        <h1>Conversation</h1>
+        <p v-if="!conversation.length" class="mute">No transcript for this ticker.</p>
+        <ol v-else class="turns">
+          <li v-for="(turn, idx) in conversation" :key="idx" class="turn" :data-role="turn.role">
+            <p class="turn-meta">
+              <strong>{{ turn.role }}</strong>
+              · {{ turn.kind }}
+              <template v-if="turn.lens"> · lens {{ turn.lens }}</template>
+              <template v-if="turn.round"> · round {{ turn.round }}</template>
+              <span v-if="turn.at" class="sub">{{ turn.at }}</span>
+            </p>
+            <p v-if="turn.summary">{{ turn.summary }}</p>
+            <p v-if="turn.hypothesis" class="mute">Hypothesis: {{ turn.hypothesis }}</p>
+            <p v-if="turn.question_hint" class="mute">Hint: {{ turn.question_hint }}</p>
+            <p v-if="turn.research_excerpt" class="rationale">{{ turn.research_excerpt }}</p>
+            <ul v-if="turnAnswerDetails(turn).length" class="turns turn-answers">
+              <li v-for="d in turnAnswerDetails(turn)" :key="d.horizon">
+                <strong>{{ d.horizon }}</strong> {{ d.action }}
+                <span v-for="[k, v] in d.extras" :key="k" class="sub"> · {{ k }}: {{ v }}</span>
+              </li>
+            </ul>
+          </li>
+        </ol>
+      </section>
+    </template>
+  </div>
+</template>
