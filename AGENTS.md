@@ -9,7 +9,7 @@ When specs disagree, respect them in this order (higher wins):
 2. `spec/domain.md`, `spec/architecture.md`
 3. `spec/data.md`
 4. `spec/behaviour/*`, `spec/decisions/*` (add decision records when changing the initial spec)
-5. `spec/tests.md` (when present)
+5. `spec/tests.md`
 
 Implement and review against these docs before inventing behaviour.
 
@@ -43,13 +43,11 @@ Implement and review against these docs before inventing behaviour.
 - `spec/decisions/0018-simplify-trust-agents.md` (revises `0012`–`0017`)
 - `spec/decisions/0019-tracker-as-second-book.md` (revises `0016`; partially reverses `0018`)
 - `spec/decisions/0020-tracker-horizons-1-3-6.md` (tracker-only horizon split)
-- `spec/stages.md` — verifiable MVP implementation stages
-
+- `spec/tests.md` — acceptance checks and regression
 
 ### Extending
 
 - Add `spec/ui-ux.md` when look-and-feel / a11y is worth locking.
-- Add `spec/tests.md` when acceptance / QA procedure is defined.
 - Add `spec/decisions/NNNN-short-title.md` when a change revises the initial spec (do not dump chat preferences).
 - If historical design notes are added, keep them in `DESIGN.md`; prefer updating `spec/` when intent changes.
 

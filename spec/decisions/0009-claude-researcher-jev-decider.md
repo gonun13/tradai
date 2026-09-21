@@ -31,4 +31,4 @@ Operator intent: separate research from decision-making, compare evidence by sig
 
 - `spec/domain.md`, `spec/architecture.md`, `spec/data.md`
 - `spec/behaviour/agent-advisory.md`
-- `spec/stages.md` Stage 5 (MVP) + Stage 5b (this model)
+- `spec/tests.md` (advisory acceptance)

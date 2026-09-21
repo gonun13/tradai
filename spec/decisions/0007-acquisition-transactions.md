@@ -27,5 +27,5 @@ Operator needs acquisition date and commissions in the book so P&L and agent con
 
 ## Spec touchpoints
 
-- `spec/data.md`, `spec/behaviour/portfolio.md`, `spec/stages.md`
+- `spec/data.md`, `spec/behaviour/portfolio.md`, `spec/tests.md`
 - Complements portfolio CRUD in Stage 2

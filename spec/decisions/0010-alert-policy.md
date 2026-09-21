@@ -28,4 +28,4 @@ Spec left the threshold open; Stage 6 needs a checkable rule. Buy/sell are the a
 
 - `spec/domain.md`, `spec/data.md`, `spec/architecture.md`
 - `spec/behaviour/agent-advisory.md`
-- `spec/stages.md` Stage 6
+- `spec/tests.md` (alerts + schedule)

@@ -116,6 +116,6 @@ enforcement). **Whatever Jev decides is still what gets written.**
 
 - Revises `spec/decisions/0016` (watchlist → tracker; a monitored book, not a name list)
 - Revises `spec/decisions/0018` (tracker UI restored; one profile becomes two)
-- `spec/domain.md`, `spec/data.md`, `spec/stages.md`
+- `spec/domain.md`, `spec/data.md`, `spec/tests.md`
 - `spec/behaviour/tracker.md` (new), `spec/behaviour/portfolio.md`,
   `spec/behaviour/monitoring.md`, `spec/behaviour/agent-advisory.md`

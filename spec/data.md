@@ -184,4 +184,4 @@ and `confidence`; further keys are Jev/TypeSafe-defined and not enumerated here)
 - Concrete SQL types, migrations tool, and whether worker shares the SQLite file vs writes only through Slim.
 - Canonical unique key for Instrument (ISIN-only vs ISIN+MIC).
 - Exact JSON shape of `jev_payload` / `jev_lenses`, and of each `answers[horizon].payload` beyond `choice`/`confidence` (depends on Jev / TypeSafe System One integration — external, not controlled by this codebase).
-- Exact JSON shape of `info_needs` (Stage 5b implementation detail; `conversation` and the context blob are now locked down above).
+- Exact JSON shape of `info_needs` (implementation detail; `conversation` and the context blob are now locked down above).

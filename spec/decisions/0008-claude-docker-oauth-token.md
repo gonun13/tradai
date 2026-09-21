@@ -22,4 +22,4 @@ Spec open item “Claude auth in Docker” blocked Stage 5. Subscription OAuth v
 ## Spec touchpoints
 
 - `spec/PROJECT.md`, `spec/architecture.md`, `spec/behaviour/agent-advisory.md`
-- `spec/stages.md` Stage 5
+- `spec/tests.md` (agent advisory)

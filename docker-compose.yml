@@ -40,13 +40,13 @@ services:
       FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
       MARKETAUX_API_TOKEN: ${MARKETAUX_API_TOKEN:-}
       IBKR_ENABLED: ${IBKR_ENABLED:-0}
-      # Stage 5 — subscription OAuth only (never set ANTHROPIC_API_KEY here)
+      # Subscription OAuth only (never set ANTHROPIC_API_KEY here)
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
       TYPESAFE_MODEL: ${TYPESAFE_MODEL:-jev-latest}
       ADVISORY_MAX_SCENARIO_ROUNDS: ${ADVISORY_MAX_SCENARIO_ROUNDS:-0}
       ADVISORY_INTERVAL_SECONDS: ${ADVISORY_INTERVAL_SECONDS:-86400}
-      # Stage 6 — post–US-close advisory (America/New_York 16:00 + offset minutes)
+      # Post–US-close advisory (America/New_York 16:00 + offset minutes)
       ADVISORY_AFTER_US_CLOSE_MINUTES: ${ADVISORY_AFTER_US_CLOSE_MINUTES:-30}
       ADVISORY_SCHEDULE_CHECK_SECONDS: ${ADVISORY_SCHEDULE_CHECK_SECONDS:-60}
     env_file:

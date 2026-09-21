@@ -24,4 +24,4 @@ Operator preference (`0005`): wait until the US session is done. Thirty minutes 
 
 - `spec/decisions/0005-after-us-close.md`
 - `spec/PROJECT.md`, `spec/architecture.md`, `spec/behaviour/agent-advisory.md`
-- `spec/stages.md` Stage 6
+- `spec/tests.md` (alerts + schedule)

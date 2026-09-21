@@ -86,21 +86,18 @@ Roles are locked in `decisions/0009-claude-researcher-jev-decider.md`: **Claude 
 
 ## Acceptance cues
 
-- After a successful Stage 5b+ run: recommendations exist with action (= combined lens), horizon, Claude research/rationale, supporting lens payloads, and confidence/Jev payload informed by the actual book.
+- After a successful run: recommendations exist with action (= combined lens), horizon, Claude research/rationale, supporting lens payloads, and confidence/Jev payload informed by the actual book.
 - Info-needs are stored on the run and visible for ingest planning.
 - Log icon per ticker shows the Claude↔Jev conversation for that instrument.
-- Crossing the (still loosely defined) attention policy creates an unread alert.
+- Crossing the attention policy creates an unread alert.
 - Operator can ack alerts.
 - Agent/LLM payloads for a run include holding sizes / costs when positions exist (not ticker-only stubs).
+
+Regression checks: `spec/tests.md`.
 
 ## Unknowns
 
 - Whether Slim is sole status BFF or worker exposes LAN endpoints too (MVP: Slim BFF; worker stays internal).
-- Exact JSON shapes for info-needs and conversation turns (implementation detail under Stage 5b).
+- Exact JSON shapes for info-needs and conversation turns (implementation detail).
 
-Alert policy: the simplified policy in `0018-simplify-trust-agents.md` (building on `0010`/`0017`). Schedule clock: `decisions/0011-us-close-schedule-offset.md`.
-
-
-## Staging note
-
-Stage 5 ships a **one-shot** Claude→Jev pipeline as MVP. Stage **5b** implements this researcher/decider loop. Auth: see `decisions/0008-claude-docker-oauth-token.md`. Roles: see `decisions/0009-claude-researcher-jev-decider.md`.
+Alert policy: the simplified policy in `0018-simplify-trust-agents.md` (building on `0010`/`0017`). Schedule clock: `decisions/0011-us-close-schedule-offset.md`. Auth: `decisions/0008-claude-docker-oauth-token.md`. Roles: `decisions/0009-claude-researcher-jev-decider.md`.
