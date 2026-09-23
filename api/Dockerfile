@@ -1,9 +1,9 @@
-FROM composer:2 AS vendor
+FROM composer:2.7 AS vendor
 WORKDIR /app
-COPY composer.json ./
+COPY composer.json composer.lock ./
 RUN composer install --no-dev --optimize-autoloader --no-interaction --no-scripts
 
-FROM php:8.3-cli-alpine
+FROM php:8.3.20-cli-alpine
 WORKDIR /app
 RUN apk add --no-cache sqlite-libs sqlite-dev $PHPIZE_DEPS \
   && docker-php-ext-install pdo pdo_sqlite \
