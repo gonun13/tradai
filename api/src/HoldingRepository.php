@@ -593,7 +593,9 @@ final class HoldingRepository
             'quote' => $quote,
             'technicals' => $this->technicalsForInstrument($instrumentId),
             'fundamentals' => $this->fundamentalsForInstrument($instrumentId),
-            'news' => $this->newsForInstrument($instrumentId, 3),
+            // Advisory sends the five most recent linked items. Keep the read model at the
+            // same depth so the context preview is an honest picture of the next run.
+            'news' => $this->newsForInstrument($instrumentId, 5),
             'instrument' => [
                 'id' => $instrumentId,
                 'isin' => $row['isin'],

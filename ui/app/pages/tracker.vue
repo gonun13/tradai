@@ -24,6 +24,15 @@ const { data, pending, refresh, error: loadError } = await useAsyncData('tracker
 )
 const entries = computed<TrackerEntry[]>(() => data.value?.tracker ?? [])
 
+const {
+  data: contextPreviewData,
+  pending: contextPending,
+  refresh: refreshContext,
+  error: contextLoadError,
+} = await useAsyncData('tracker-context-preview', () => api.contextPreview('tracker'))
+
+const refreshBook = () => Promise.all([refresh(), refreshContext()])
+
 const { data: advisoryData, refresh: refreshAdvisory } = await useAsyncData('tracker-advisory', () =>
   api.latestRun().catch(() => ({ ok: true, run: null, recommendations: [] as Recommendation[] })),
 )
@@ -129,7 +138,7 @@ async function submit() {
     cancelAdd()
     query.value = ''
     results.value = []
-    await refresh()
+    await refreshBook()
   } catch (e) {
     error.value = errText(e)
   } finally {
@@ -152,7 +161,7 @@ async function saveNote(entry: TrackerEntry) {
   try {
     await api.updateTracker(entry.id, { note: editNote.value.trim() || null })
     editingId.value = null
-    await refresh()
+    await refreshBook()
   } catch (e) {
     error.value = errText(e)
   } finally {
@@ -169,7 +178,7 @@ async function removeEntry(entry: TrackerEntry) {
   try {
     await api.removeTracker(entry.id)
     message.value = `${entry.symbol} removed from the tracker.`
-    await refresh()
+    await refreshBook()
   } catch (e) {
     error.value = errText(e)
   } finally {
@@ -194,7 +203,7 @@ async function runSingle(entry: TrackerEntry) {
     message.value = `Run #${runId} started for ${entry.symbol}...`
     // Poll for completion
     await pollSingleRun(runId)
-    await Promise.all([refresh(), refreshAdvisory()])
+    await Promise.all([refresh(), refreshContext(), refreshAdvisory()])
   } catch (e) {
     error.value = errText(e)
   } finally {
@@ -368,7 +377,7 @@ const noQuoteYet = computed(() => entries.value.filter((e) => e.quote === null))
     <section class="panel">
       <div class="list-head">
         <h1>Tracked names</h1>
-        <button type="button" class="ghost" :disabled="pending" @click="refresh()">Reload</button>
+        <button type="button" class="ghost" :disabled="pending" @click="refreshBook()">Reload</button>
       </div>
       <p v-if="pending" class="mute">Loading…</p>
       <p v-else-if="!entries.length" class="mute">
@@ -396,10 +405,10 @@ const noQuoteYet = computed(() => entries.value.filter((e) => e.quote === null))
             <td class="mute">{{ e.name || '—' }}</td>
             <td>{{ e.quote ? moneyOrDash(e.quote.price, e.quote.currency) : '—' }}</td>
             <td>{{ moneyOrDash(e.price_eur) }}</td>
-            <td>{{ pctOrDash(e.technicals?.return_1m_pct) }}</td>
-            <td>{{ pctOrDash(e.technicals?.return_3m_pct) }}</td>
-            <td>{{ pctOrDash(e.technicals?.return_6m_pct) }}</td>
-            <td>{{ fmtNum(e.technicals?.rsi_14, 1) }}</td>
+            <td>{{ pctOrDash(e.technicals?.features.return_1m_pct) }}</td>
+            <td>{{ pctOrDash(e.technicals?.features.return_3m_pct) }}</td>
+            <td>{{ pctOrDash(e.technicals?.features.return_6m_pct) }}</td>
+            <td>{{ fmtNum(e.technicals?.features.rsi_14, 1) }}</td>
             <td>
               <template v-if="editingId === e.id">
                 <input v-model="editNote" class="note-input" autocomplete="off">
@@ -451,6 +460,13 @@ const noQuoteYet = computed(() => entries.value.filter((e) => e.quote === null))
       :recommendations="advisoryData?.recommendations ?? []"
       :busy="advising"
       @reload="refreshAdvisory()"
+    />
+
+    <AgentContextPreview
+      book="tracker"
+      :items="contextPreviewData?.instruments ?? []"
+      :pending="contextPending"
+      :error="contextLoadError?.message ?? null"
     />
   </div>
 </template>

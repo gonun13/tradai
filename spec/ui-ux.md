@@ -23,7 +23,7 @@ shared components.
 | Module | Character | Visual cues | Primary content order |
 | --- | --- | --- | --- |
 | Portfolio | Precise ledger | Evergreen on warm ivory, square rules, owned-capital language | Summary, holdings, decisions, agent context |
-| Tracker | Exploratory research workspace | Cobalt on cool mist, softer research surface, entry language | Summary, discovery, tracked names, signals |
+| Tracker | Exploratory research workspace | Cobalt on cool mist, softer research surface, entry language | Summary, discovery, tracked names, signals, agent context |
 
 Every module opens with its name, purpose, subject count and its own advisory horizons. Color is
 supporting information only: titles, copy and active navigation also identify the module.
@@ -37,6 +37,9 @@ supporting information only: titles, copy and active navigation also identify th
   `/log/<symbol>` path redirects to the book stored on the latest recommendation.
 - Global alerts show their originating book and link to that book's decision log.
 - Loading, empty, warning and error states stay inside the active module identity.
+- Both modules expose the next-run agent context per ticker in disclosures that are closed by
+  default. An open disclosure shows Historical, Fundamentals and Technicals in one responsive
+  row, followed by a full-width News row; each layer names missing data explicitly.
 
 ## Responsive and accessible behavior
 
@@ -45,5 +48,6 @@ supporting information only: titles, copy and active navigation also identify th
 - Module switching, shared tools, forms, alert tabs and log links are keyboard reachable with a
   visible focus indicator.
 - Active module state uses `aria-current="page"`; controls keep explicit labels and disabled state.
+- Agent-context ticker disclosures are keyboard operable and their three data columns stack without
+  changing meaning on narrow screens.
 - Text and interactive boundaries must remain readable at WCAG AA contrast in both palettes.
-

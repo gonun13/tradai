@@ -28,23 +28,25 @@ export type Quote = {
   updated_at: string
 }
 
-export type Technicals = {
+export type TechnicalFeatures = {
+  as_of_bar?: string | null
+  bar_count?: number | null
+  last_close?: number | null
+  sma_20?: number | null
+  sma_50?: number | null
+  rsi_14?: number | null
+  return_1m_pct?: number | null
+  return_3m_pct?: number | null
+  return_6m_pct?: number | null
+  vs_sma20_pct?: number | null
+  vs_sma50_pct?: number | null
+}
+
+export type TechnicalsSnapshot = {
   as_of: string
   source: string
   updated_at: string
-  features: {
-    as_of_bar?: string | null
-    bar_count?: number
-    last_close?: number | null
-    sma_20?: number | null
-    sma_50?: number | null
-    rsi_14?: number | null
-    return_1m_pct?: number | null
-    return_3m_pct?: number | null
-    return_6m_pct?: number | null
-    vs_sma20_pct?: number | null
-    vs_sma50_pct?: number | null
-  }
+  features: TechnicalFeatures
 }
 
 export type NewsItem = {
@@ -68,6 +70,23 @@ export type FundamentalsSnapshot = {
   updated_at?: string
 }
 
+export type AgentContextPreviewItem = {
+  book: Book
+  symbol: string
+  name: string | null
+  historical: {
+    quote: Quote | null
+    bars: {
+      count: number | null
+      last_close: number | null
+      as_of: string | null
+    } | null
+  }
+  fundamentals: FundamentalsSnapshot | null
+  technicals: TechnicalsSnapshot | null
+  news: NewsItem[]
+}
+
 export type Holding = {
   id: number
   quantity: number
@@ -88,7 +107,7 @@ export type Holding = {
   fx_to_eur: number | null
   display_currency: 'EUR'
   quote: Quote | null
-  technicals: Technicals | null
+  technicals: TechnicalsSnapshot | null
   fundamentals: FundamentalsSnapshot | null
   news: NewsItem[]
   created_at: string
@@ -289,6 +308,14 @@ export function useHoldingsApi() {
   // the portfolio, so entries carry a quote and technicals like a holding does.
   const listTracker = () => $fetch<{ ok: boolean; tracker: TrackerEntry[] }>('/api/tracker')
 
+  const contextPreview = (book: Book) =>
+    $fetch<{
+      ok: boolean
+      book: Book
+      display_currency: 'EUR'
+      instruments: AgentContextPreviewItem[]
+    }>('/api/context/preview', { query: { book } })
+
   const addTracker = (body: TrackerInput) =>
     $fetch<{ ok: boolean; entry: TrackerEntry }>('/api/tracker', { method: 'POST', body })
 
@@ -316,6 +343,7 @@ export function useHoldingsApi() {
     createThesis,
     removeThesis,
     listTracker,
+    contextPreview,
     addTracker,
     updateTracker,
     removeTracker,
@@ -475,7 +503,7 @@ export type AgentContextTracked = {
   currency: string
   quote: { price: number | null; currency: string | null; as_of: string | null } | null
   price_eur: number | null
-  technicals: Technicals | null
+  technicals: TechnicalFeatures | null
   fundamentals: FundamentalsSnapshot | null
   news: Array<{
     title: string
@@ -542,16 +570,6 @@ export type ThesisCoverage = {
   pending_drafts: number
 }
 
-export type Technicals = {
-  rsi_14?: number
-  sma_20?: number
-  sma_50?: number
-  return_1m_pct?: number
-  return_3m_pct?: number
-  return_6m_pct?: number
-  last_close?: number
-}
-
 export type TrackerEntry = {
   id: number
   symbol: string
@@ -568,10 +586,10 @@ export type TrackerEntry = {
     mic: string | null
     isin: string | null
   }
-  quote: { price: number; currency: string; as_of: string } | null
+  quote: Quote | null
   // No cost basis exists for an unowned name, so the EUR figure is just the converted quote.
   price_eur: number | null
-  technicals: Technicals | null
+  technicals: TechnicalsSnapshot | null
   fundamentals: FundamentalsSnapshot | null
   news: NewsItem[]
 }

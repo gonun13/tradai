@@ -8,7 +8,7 @@ import type {
 } from '~/composables/useHoldingsApi'
 
 const api = useHoldingsApi()
-const { money, moneyOrDash, pctOrDash, fmtNum } = useFormat()
+const { money, moneyOrDash, pctOrDash } = useFormat()
 const route = useRoute()
 const message = ref('')
 const error = ref('')
@@ -37,6 +37,15 @@ const emptyForm = (): HoldingInput => ({
 const form = reactive<HoldingInput>(emptyForm())
 
 const { data, pending, refresh, error: loadError } = await useAsyncData('holdings', () => api.list())
+
+const {
+  data: contextPreviewData,
+  pending: contextPending,
+  refresh: refreshContext,
+  error: contextLoadError,
+} = await useAsyncData('portfolio-context-preview', () => api.contextPreview('portfolio'))
+
+const refreshBook = () => Promise.all([refresh(), refreshContext()])
 
 const holdings = computed(() => data.value?.holdings ?? [])
 const portfolioEur = computed(() => data.value?.portfolio_market_value_eur ?? null)
@@ -189,7 +198,7 @@ async function submit() {
       message.value = 'Acquisition lot updated.'
     }
     resetForm()
-    await refresh()
+    await refreshBook()
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : 'Save failed'
   }
@@ -215,7 +224,7 @@ async function removeHolding(h: Holding) {
     if (lotPickerHolding.value?.id === h.id) {
       lotPickerHolding.value = null
     }
-    await refresh()
+    await refreshBook()
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : 'Delete failed'
   }
@@ -372,7 +381,7 @@ async function removeHolding(h: Holding) {
         <h1>Holdings</h1>
         <div class="actions">
           <button type="button" @click="startAdd()">Add acquisition</button>
-          <button type="button" class="ghost" :disabled="pending" @click="refresh()">Reload</button>
+          <button type="button" class="ghost" :disabled="pending" @click="refreshBook()">Reload</button>
         </div>
       </div>
       <p v-if="portfolioEur != null" class="ok">
@@ -463,29 +472,11 @@ async function removeHolding(h: Holding) {
       @reload="refreshAdvisory()"
     />
 
-    <section v-if="holdings.length" class="panel">
-      <h1>Agent context preview</h1>
-      <p class="mute">Full book features fed to Claude + Jev on Run now.</p>
-      <div v-for="h in holdings" :key="`ctx-${h.id}`" class="ctx">
-        <h2>{{ h.instrument.symbol }} <span class="mute">{{ h.instrument.name }}</span></h2>
-        <p v-if="h.technicals?.features" class="tech">
-          RSI14 {{ fmtNum(h.technicals.features.rsi_14, 1) }}
-          · SMA20 {{ fmtNum(h.technicals.features.sma_20) }}
-          · SMA50 {{ fmtNum(h.technicals.features.sma_50) }}
-          · 1m {{ pctOrDash(h.technicals.features.return_1m_pct) }}
-          · 3m {{ pctOrDash(h.technicals.features.return_3m_pct) }}
-          <span class="sub">bars {{ h.technicals.features.bar_count ?? 0 }} · as of {{ h.technicals.features.as_of_bar || h.technicals.as_of }}</span>
-        </p>
-        <p v-else class="mute">No technicals yet — run Ingest now.</p>
-        <ul v-if="h.news?.length" class="news">
-          <li v-for="n in h.news" :key="n.id">
-            <a v-if="n.url" :href="n.url" target="_blank" rel="noopener noreferrer">{{ n.title }}</a>
-            <span v-else>{{ n.title }}</span>
-            <span class="sub">{{ n.source_name || 'news' }} · {{ n.published_at || n.fetched_at }}</span>
-          </li>
-        </ul>
-        <p v-else class="mute">No news cached for this name.</p>
-      </div>
-    </section>
+    <AgentContextPreview
+      book="portfolio"
+      :items="contextPreviewData?.instruments ?? []"
+      :pending="contextPending"
+      :error="contextLoadError?.message ?? null"
+    />
   </div>
 </template>
