@@ -41,9 +41,32 @@ supporting information only: titles, copy and active navigation also identify th
   default. An open disclosure shows Historical, Fundamentals and Technicals in one responsive
   row, followed by a full-width News row; each layer names missing data explicitly.
 
+## Setup
+
+`/setup` is a neutral utility page with two book-specific cards in module-switcher order:
+
+- **Portfolio** appears first and uses the evergreen, square-edged owned-capital identity. Its
+  form contains the Portfolio profile, cash reserve, realised gains elsewhere, the calculated
+  realised total, and **Save portfolio**.
+- **Tracker** uses the cobalt, softer research identity. Its form contains the Investor profile,
+  the empty-profile warning, and **Save investor profile**.
+
+Each card has independent loading, disabled, success, and error states. Saving a card sends only
+that card's fields, so an unsaved draft or persisted value in the other card cannot be overwritten.
+The Investor profile sets the Tracker buying lens and accompanies all advice; the Portfolio
+profile adds sizing, trimming, selling, and tax rules for owned positions.
+
+A compact, neutral **Service status** area reports Claude research and Jev decisions as **Ready**
+or **Needs attention**, and Finnhub, Marketaux, and FMP as **Connected** or **Not connected —
+optional**. It may show a concise Anthropic API billing conflict warning and offers **Check again**.
+It does not expose environment variable names, vendor URLs, setup commands, or credential
+locations. Daily schedule and alert-policy details remain outside the Setup page.
+
 ## Responsive and accessible behavior
 
 - The utility bar may wrap on medium screens and stacks above the module on narrow screens.
+- Setup's Portfolio and Tracker cards sit side by side on desktop and stack in the same order on
+  narrow screens, with fields contained within their cards and each identity retained.
 - Wide data tables scroll horizontally without clipping actions or changing column meaning.
 - Module switching, shared tools, forms, alert tabs and log links are keyboard reachable with a
   visible focus indicator.

@@ -276,6 +276,7 @@ export function useHoldingsApi() {
 
   const saveSettings = (body: {
     investor_profile_text?: string | null
+    portfolio_profile_text?: string | null
     cash_eur?: number | null
     realized_gains_ytd_override_eur?: number | null
   }) =>

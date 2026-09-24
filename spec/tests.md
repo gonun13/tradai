@@ -94,17 +94,31 @@ Token thrift defaults: `ADVISORY_INTERVAL_SECONDS=86400`, `ADVISORY_MAX_SCENARIO
 
 ### Alerts + schedule (`0011`, `0018`)
 
-1. `/setup` — key presence docs (secrets stay in `.env`)
+1. `/setup` — compact Service status reports required and optional readiness without exposing
+   variable names, commands, vendor URLs, schedule details, or alert-policy prose
 2. Buy/sell recommendations raise in-app alerts; bell → Unread / Read; **Ack** clears unread
 3. `docker compose exec worker curl -fsS http://api:8080/alerts` and `docker compose exec worker curl -fsS -X POST http://api:8080/alerts/1/ack`; alert JSON includes `book`
 4. Worker logs show schedule arming; after US close + `ADVISORY_AFTER_US_CLOSE_MINUTES` (default 30 → 16:30 ET) a `trigger=schedule` run starts at most once per ET trading day
 
 ### Profiles + doctrine (`0012`–`0018`)
 
-1. `/setup` → Investor profile + Portfolio profile + cash / realised gains → save
-2. Forced advisory run — every recommendation has a `reason`; sells may show an informational `loss_gate`
-3. Per-ticker log shows reason/gate as informational chips (nothing is suppressed in code)
-4. `docker compose exec worker curl -fsS http://api:8080/agent/outcomes` — matured recs vs later prices (`pending` until horizons elapse)
+1. `/setup` → save Portfolio profile + cash / realised gains with **Save portfolio**; the Investor
+   profile remains unchanged
+2. Save Investor profile with **Save investor profile**; Portfolio fields remain unchanged
+3. Each form shows local loading/disabled, success, and error states; an empty Investor profile
+   shows its generic-buying-lens warning; calculated realised total still renders
+4. Forced advisory run — every recommendation has a `reason`; sells may show an informational `loss_gate`
+5. Per-ticker log shows reason/gate as informational chips (nothing is suppressed in code)
+6. `docker compose exec worker curl -fsS http://api:8080/agent/outcomes` — matured recs vs later prices (`pending` until horizons elapse)
+
+### Setup service readiness
+
+1. Required services present → Claude research and Jev decisions show **Ready**
+2. Required services absent → their rows show **Needs attention**
+3. Finnhub, Marketaux, and FMP present → **Connected**; absent → **Not connected — optional**
+4. Anthropic API billing configured → Claude research shows **Needs attention** and a concise
+   billing warning; no environment variable name or remediation command appears
+5. **Check again** refreshes service state and exposes a local checking/disabled state
 
 ### Tracker (`behaviour/tracker.md`, `0019`, `0020`)
 
@@ -142,6 +156,10 @@ docker compose exec worker python test_persist_e2e.py
 7. Capture screenshots of both modules at desktop and narrow widths for stakeholder visual review.
 8. Both modules show an Agent context preview after recommendations. Every ticker is closed by
    default; opening one reveals three columns (Historical, Fundamentals, Technicals) and a News row.
+9. `/setup` is neutral with side-by-side Portfolio then Tracker cards at desktop width; at a narrow
+   viewport the cards stack without clipped fields or losing their evergreen/cobalt identities.
+10. Setup forms and **Check again** are keyboard reachable, focus is visible, labels are explicit,
+    and card/status text remains readable at WCAG AA contrast.
 
 ## Full happy path (release)
 
