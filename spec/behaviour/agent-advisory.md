@@ -45,7 +45,7 @@ Roles are locked in `decisions/0009-claude-researcher-jev-decider.md`: **Claude 
    Claude↔Jev transcript are stored for the UI.
 9. Alert policy (`0017`, simplified by `0018`) creates `Alert` rows for any buy/sell and for thesis breaks. This
    covers a tracked name Jev says to buy now; `drop` does not alert.
-10. Each tab shows its own book's recommendations and the shared unread alerts until the next daily run (unless
+10. Each module shows its own book's recommendations and the shared unread alerts until the next daily run (unless
     manually re-run). Operator can open a **log icon per ticker** to read that instrument's Claude↔Jev
     conversation for the run.
 

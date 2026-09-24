@@ -112,6 +112,12 @@ def run_case(name, *, choices, realized_gains=0.0, expect_action, expect_reason=
         " WHERE agent_run_id = ? AND instrument_id = ? AND horizon = ?",
         (run_id, iid, mid_horizon),
     ).fetchone()
+    persisted_horizons = {
+        r["horizon"] for r in conn.execute(
+            "SELECT horizon FROM recommendations WHERE agent_run_id = ? AND instrument_id = ?",
+            (run_id, iid),
+        )
+    }
 
     conn.close()
     shutil.rmtree(tmp, ignore_errors=True)
@@ -127,6 +133,11 @@ def run_case(name, *, choices, realized_gains=0.0, expect_action, expect_reason=
         print(f"  FAIL {name}: gate {row['loss_gate']!r} != {expect_gate!r}"); ok = False
     if row["book"] != book:
         print(f"  FAIL {name}: book {row['book']!r} != {book!r}"); ok = False
+    # 0020: check persisted rows against the decision, not HORIZONS_BY_BOOK used
+    # to construct the inputs above, so a wrong production map cannot pass itself.
+    expected_horizons = {"portfolio": {"6m", "12m", "24m"}, "tracker": {"1m", "3m", "6m"}}[book]
+    if persisted_horizons != expected_horizons:
+        print(f"  FAIL {name}: horizons {persisted_horizons!r} != {expected_horizons!r}"); ok = False
     if expect_lenses is not None:
         got = sorted(json.loads(row["jev_lenses_json"] or "{}").keys())
         if got != sorted(expect_lenses):

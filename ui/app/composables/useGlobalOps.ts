@@ -7,18 +7,21 @@ export function useGlobalOps() {
   const error = useState('ops-error', () => '')
 
   const { data: holdingsPayload } = useNuxtData<{ holdings?: unknown[] }>('holdings')
+  const { data: trackerPayload } = useNuxtData<{ tracker?: unknown[] }>('tracker')
 
   const holdingsCount = computed(() => holdingsPayload.value?.holdings?.length ?? 0)
+  const trackerCount = computed(() => trackerPayload.value?.tracker?.length ?? 0)
   const busy = computed(() => refreshing.value || advising.value)
-  // When holdings payload is absent (other pages), allow run; API rejects empty books.
+  // One run covers both books. If either payload has not been loaded in this browser session,
+  // let the API resolve whether the combined book is empty.
   const canRun = computed(() => {
     if (busy.value) {
       return false
     }
-    if (holdingsPayload.value == null) {
+    if (holdingsPayload.value == null || trackerPayload.value == null) {
       return true
     }
-    return holdingsCount.value > 0
+    return holdingsCount.value + trackerCount.value > 0
   })
 
   async function pollRun(runId: number) {
@@ -66,7 +69,11 @@ export function useGlobalOps() {
       } else {
         message.value = `Ingest complete: ${parts.join(' · ')}.`
       }
-      await Promise.all([refreshNuxtData('holdings'), refreshNuxtData('ingest-report')])
+      await Promise.all([
+        refreshNuxtData('holdings'),
+        refreshNuxtData('tracker'),
+        refreshNuxtData('ingest-report'),
+      ])
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : 'Ingest failed'
     } finally {

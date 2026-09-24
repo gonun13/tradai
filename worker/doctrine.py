@@ -78,6 +78,11 @@ def split_choice(choice: Any, book: str = "portfolio") -> tuple[str, str] | None
     return choice_map(book).get(choice.strip().lower())
 
 
+def resolved_portfolio_profile(profiles: dict[str, Any] | None) -> str:
+    """The holdings-only profile text, including its unwritten fallback (0019)."""
+    return ((profiles or {}).get("portfolio") or "").strip() or DEFAULT_PORTFOLIO_PROFILE
+
+
 def compose_mandate(profiles: dict[str, Any] | None, book: str = "portfolio") -> str:
     """
     The text a model is actually given for this book (0019). The investor profile always
@@ -88,7 +93,7 @@ def compose_mandate(profiles: dict[str, Any] | None, book: str = "portfolio") ->
     investor = (profiles.get("investor") or "").strip() or DEFAULT_INVESTOR_PROFILE
     if book == "tracker":
         return investor
-    portfolio = (profiles.get("portfolio") or "").strip() or DEFAULT_PORTFOLIO_PROFILE
+    portfolio = resolved_portfolio_profile(profiles)
     return f"{investor} {portfolio}"
 
 

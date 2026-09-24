@@ -37,14 +37,14 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _days_since(date_str: Any) -> int | None:
+def _days_since(date_str: Any, *, now: datetime) -> int | None:
     if not date_str:
         return None
     try:
         start = datetime.fromisoformat(str(date_str)[:10]).replace(tzinfo=timezone.utc)
     except ValueError:
         return None
-    return max(0, (datetime.now(timezone.utc) - start).days)
+    return max(0, (now - start).days)
 
 
 def max_scenario_rounds() -> int:
@@ -581,7 +581,7 @@ class AdvisoryService:
                     # 0013: a 12-year-old dead position and a fresh conviction add both show a
                     # deep negative P&L. Nothing but the holding period separates them.
                     "first_trade_date": row["first_trade_date"],
-                    "held_days": _days_since(row["first_trade_date"]),
+                    "held_days": _days_since(row["first_trade_date"], now=datetime.now(timezone.utc)),
                     "open_lot_count": row["open_lot_count"],
                     "realized_pnl_native": row["realized_pnl_native"],
                     "thesis": self._approved_thesis(conn, int(row["instrument_id"])),
@@ -875,7 +875,7 @@ class AdvisoryService:
             f"INVESTOR PROFILE (who the operator is, what makes a name worth buying — "
             f"applies to BOTH books): {doctrine.compose_mandate(profiles, 'tracker')}\n"
             f"PORTFOLIO PROFILE (rules for names already owned — applies to HOLDINGS only): "
-            f"{(profiles.get('portfolio') or '').strip() or doctrine.DEFAULT_PORTFOLIO_PROFILE}\n"
+            f"{doctrine.resolved_portfolio_profile(profiles)}\n"
             "SELL DOCTRINE (0013): the only valid reasons to sell are (a) the recorded investment "
             "thesis is broken, or (b) the capital has a specific better named use. Price action, "
             "momentum, moving averages, drawdown depth and concentration are NEVER reasons to sell. "

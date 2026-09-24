@@ -3,9 +3,9 @@ import type { AgentRun, Book, Recommendation } from '~/composables/useHoldingsAp
 
 /**
  * One combined daily run decides on both books (0019), so it produces one recommendation
- * list. Each tab renders this filtered to its own `book` — you never have to read past the
+ * list. Each module renders this filtered to its own `book` — you never have to read past the
  * other book's rows to find yours. A cross-book `sell A to fund B` still shows: the sell
- * appears here with its `pair_symbol` linking across to the Tracker tab.
+ * appears here with its `pair_symbol` linking across to the Tracker module.
  */
 const props = defineProps<{
   book: Book
@@ -69,7 +69,7 @@ function lensLine(recs: Recommendation[]) {
 }
 
 function logPath(symbol: string) {
-  return `/log/${encodeURIComponent(symbol)}`
+  return `/${props.book}/log/${encodeURIComponent(symbol)}`
 }
 
 function onLogClick(event: Event, rec: Recommendation | undefined) {
@@ -82,7 +82,10 @@ function onLogClick(event: Event, rec: Recommendation | undefined) {
 <template>
   <section class="panel">
     <div class="list-head">
-      <h1>Recommendations</h1>
+      <div>
+        <p class="section-kicker">{{ book === 'portfolio' ? 'Owned-book advisory' : 'Entry advisory' }}</p>
+        <h1>{{ book === 'portfolio' ? 'Portfolio decisions' : 'Tracker signals' }}</h1>
+      </div>
       <button type="button" class="ghost" :disabled="busy" @click="emit('reload')">Reload run</button>
     </div>
 
@@ -105,7 +108,7 @@ function onLogClick(event: Event, rec: Recommendation | undefined) {
     <p v-if="run?.error" class="bad">{{ run.error }}</p>
     <pre v-if="run?.log" class="log">{{ run.log }}</pre>
 
-    <!-- Info-needs are run-wide (they plan the next ingest), so both tabs show them. -->
+    <!-- Info-needs are run-wide (they plan the next ingest), so both modules show them. -->
     <div v-if="infoNeeds.length" class="info-needs">
       <h2>Info-needs (ingest planning)</h2>
       <ul>
@@ -139,11 +142,25 @@ function onLogClick(event: Event, rec: Recommendation | undefined) {
       </p>
       <p v-if="lensLine(recs)" class="sub lenses">supporting {{ lensLine(recs) }}</p>
       <!-- 0013's `better_use` finally has somewhere to point: the named alternative lives
-           in the other tab, so link straight to it. -->
+           in the other module, so link straight to it. -->
       <p v-for="r in recs.filter((x) => x.pair_symbol)" :key="`pair-${r.id}`" class="sub">
         {{ r.horizon }}: proceeds would fund
-        <NuxtLink :to="book === 'portfolio' ? '/tracker' : '/'">{{ r.pair_symbol }}</NuxtLink>
+        <NuxtLink :to="book === 'portfolio' ? '/tracker' : '/portfolio'">{{ r.pair_symbol }}</NuxtLink>
       </p>
     </div>
   </section>
 </template>
+
+<style scoped>
+.section-kicker {
+  margin: 0 0 0.2rem;
+  color: var(--accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.section-kicker + h1 { margin-bottom: 0; }
+</style>

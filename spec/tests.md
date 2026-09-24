@@ -17,6 +17,18 @@ Setup and day-to-day running live in the root `README.md`. This file is acceptan
 
 Prefer `bin/up -d` for checks. Use `bin/down -v` only when you intend to wipe the SQLite volume.
 
+## Execution environment
+
+- **Everything runs in Docker.** Build application images with Compose and run project scripts,
+  Python, PHP, Node and HTTP probes inside the appropriate container. Do not use host-installed
+  application runtimes for verification.
+- The host is only an orchestrator for `docker compose` / `bin/*` and the available **Docker
+  Playwright MCP**.
+- Browser acceptance, responsive checks and visual regression are performed with the Docker
+  Playwright MCP against `http://127.0.0.1:3000`.
+- API probes run from the worker container over the Compose network, for example
+  `docker compose exec worker curl -fsS http://api:8080/health`.
+
 ## Prerequisites
 
 ```bash
@@ -32,18 +44,19 @@ cp .env.example .env   # if needed
 
 ## Smoke
 
-1. `bin/up -d`
-2. `curl -s http://127.0.0.1:8080/health` → JSON with `"ok": true`
-3. Open `http://127.0.0.1:3000` — Portfolio dashboard loads
-4. `docker compose logs worker --tail 20` — periodic `[tradai-worker] heartbeat`
-5. `bin/down` then `bin/up -d` — data under `tradai-data` still present (unless you used `-v`)
+1. `docker compose build` then `bin/up -d`
+2. `docker compose exec worker curl -fsS http://api:8080/health` → JSON with `"ok": true`
+3. Docker Playwright MCP opens `http://127.0.0.1:3000` → redirects to `/portfolio`; Portfolio loads
+4. Docker Playwright MCP opens `/tracker`; Tracker has a distinct module identity and shared utility bar
+5. `docker compose logs worker --tail 20` — periodic `[tradai-worker] heartbeat`
+6. `bin/down` then `bin/up -d` — data under `tradai-data` still present (unless you used `-v`)
 
 ## Acceptance by area
 
 ### Portfolio (`behaviour/portfolio.md`)
 
 1. UI: add / edit / delete a holding (acquisition: trade date, qty, unit price, commission)
-2. `curl -s http://127.0.0.1:8080/holdings` — book JSON
+2. `docker compose exec worker curl -fsS http://api:8080/holdings` — book JSON
 3. Restart Compose — holding still present
 4. Money labels on the dashboard are EUR
 
@@ -59,14 +72,14 @@ cp .env.example .env   # if needed
 
 1. Set `MARKETAUX_API_TOKEN`
 2. **Ingest now** — technicals (RSI/SMA) on holdings; news when the token is set (news at most once per day from SQLite cache)
-3. Force news: `curl -s -X POST 'http://127.0.0.1:8080/refresh/market?force_news=1'`
-4. Optional: `curl -s http://127.0.0.1:8080/context/preview`
+3. Force news: `docker compose exec worker curl -fsS -X POST 'http://api:8080/refresh/market?force_news=1'`
+4. Optional: `docker compose exec worker curl -fsS http://api:8080/context/preview`
 
 ### Agent advisory (`behaviour/agent-advisory.md`, `0009`)
 
 1. Set Claude OAuth + TypeSafe keys; rebuild worker if needed
 2. UI → **Run now** — recommendations: portfolio buy/sell/hold/watch × **6m / 12m / 24m**; tracker × **1m / 3m / 6m**
-3. Or: `curl -s -X POST http://127.0.0.1:8080/agent/run` then `curl -s http://127.0.0.1:8080/agent/runs/latest`
+3. Or run inside Compose: `docker compose exec worker curl -fsS -X POST http://api:8080/agent/run`, then `docker compose exec worker curl -fsS http://api:8080/agent/runs/latest`
 4. Missing tokens → **failed** run with a visible error (not a silent no-op)
 5. Repeats within 24h reuse SQLite cache; **Force run** or `?force=1` bypasses it
 6. Recommendation chips = Jev **combined** lens; supporting lenses under each ticker
@@ -78,7 +91,7 @@ Token thrift defaults: `ADVISORY_INTERVAL_SECONDS=86400`, `ADVISORY_MAX_SCENARIO
 
 1. `/setup` — key presence docs (secrets stay in `.env`)
 2. Buy/sell recommendations raise in-app alerts; bell → Unread / Read; **Ack** clears unread
-3. `curl -s http://127.0.0.1:8080/alerts` and `curl -s -X POST http://127.0.0.1:8080/alerts/1/ack`
+3. `docker compose exec worker curl -fsS http://api:8080/alerts` and `docker compose exec worker curl -fsS -X POST http://api:8080/alerts/1/ack`; alert JSON includes `book`
 4. Worker logs show schedule arming; after US close + `ADVISORY_AFTER_US_CLOSE_MINUTES` (default 30 → 16:30 ET) a `trigger=schedule` run starts at most once per ET trading day
 
 ### Profiles + doctrine (`0012`–`0018`)
@@ -86,14 +99,14 @@ Token thrift defaults: `ADVISORY_INTERVAL_SECONDS=86400`, `ADVISORY_MAX_SCENARIO
 1. `/setup` → Investor profile + Portfolio profile + cash / realised gains → save
 2. Forced advisory run — every recommendation has a `reason`; sells may show an informational `loss_gate`
 3. Per-ticker log shows reason/gate as informational chips (nothing is suppressed in code)
-4. `curl -s http://127.0.0.1:8080/agent/outcomes` — matured recs vs later prices (`pending` until horizons elapse)
+4. `docker compose exec worker curl -fsS http://api:8080/agent/outcomes` — matured recs vs later prices (`pending` until horizons elapse)
 
 ### Tracker (`behaviour/tracker.md`, `0019`, `0020`)
 
 1. `/tracker` → search (e.g. "airbus") → add with a note
 2. **Ingest now** — quote / bars / technicals for the tracked name; **no** news section for it
-3. **Force run** — Tracker tab recommendations, three lenses (no news), horizons **1m / 3m / 6m**
-4. `/log/<symbol>` — "Tracked, not owned"; investor profile as mandate context
+3. **Force run** — Tracker module recommendations, three lenses (no news), horizons **1m / 3m / 6m**
+4. `/tracker/log/<symbol>` — "Tracked, not owned"; investor profile as mandate context
 5. Record an acquisition → entry archives to Portfolio; delete the holding → tracker returns with note intact
 6. Adding a symbol that is already a holding → HTTP 409
 
@@ -111,6 +124,16 @@ docker compose exec worker python test_persist_e2e.py
 | `test_doctrine.py` | Choice parsing, loss-gate labels, mandate composition, tracker vs portfolio choice maps |
 | `test_persist_e2e.py` | Persisted action is exactly what Jev decided (never rewritten); tracker verbs, `book` column, three-lens rule |
 
+## Browser acceptance (Docker Playwright MCP)
+
+1. `/` redirects to `/portfolio`; `/?buy=NVDA` redirects to `/portfolio?buy=NVDA` and opens the acquisition form.
+2. Portfolio and Tracker use different palettes, page composition and language; switching modules updates `aria-current` and browser history.
+3. The neutral utility bar stays available in both modules and labels its operations as applying to both books.
+4. `/portfolio/log/<symbol>` and `/tracker/log/<symbol>` keep the correct module identity. Legacy `/log/<symbol>` redirects to the latest recommendation's book.
+5. The global alert menu labels each alert `portfolio` or `tracker`; its symbol link opens the corresponding module log and Ack still works.
+6. At desktop and narrow viewports, tables scroll instead of clipping, the utility bar wraps/stacks, focus is visible and all controls are keyboard reachable.
+7. Capture screenshots of both modules at desktop and narrow widths for stakeholder visual review.
+
 ## Full happy path (release)
 
 1. `bin/up -d --build`
@@ -118,7 +141,7 @@ docker compose exec worker python test_persist_e2e.py
 3. Write investor + portfolio profiles; set cash if desired
 4. Add at least one holding and one tracker name
 5. **Ingest now** → EUR quotes / technicals (and holdings news if token set)
-6. **Force run** → recommendations on both tabs; alerts for buy/sell; log transcript opens
+6. **Force run** → recommendations in both modules; alerts for buy/sell; book-scoped log transcript opens
 7. Both worker test scripts pass
 8. `bin/down` / `bin/up -d` — book and run history still present
 

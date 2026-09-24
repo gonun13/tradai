@@ -25,11 +25,12 @@ DATA_DIR = os.environ.get("TRADAI_DATA_DIR", "/data")
 DB_PATH = os.path.join(DATA_DIR, "tradai.sqlite")
 HEARTBEAT_SECONDS = int(os.environ.get("WORKER_HEARTBEAT_SECONDS", "30"))
 QUOTE_INTERVAL = int(os.environ.get("WORKER_QUOTE_INTERVAL_SECONDS", "300"))
+NEWS_INTERVAL = int(os.environ.get("WORKER_NEWS_INTERVAL_SECONDS", "86400"))
 HTTP_PORT = int(os.environ.get("WORKER_HTTP_PORT", "8090"))
 
 _refresh_lock = threading.Lock()
 _advisory_lock = threading.Lock()
-_service = MarketRefreshService(DB_PATH)
+_service = MarketRefreshService(DB_PATH, news_interval_seconds=NEWS_INTERVAL)
 _advisory = AdvisoryService(DB_PATH)
 _symbol_search = SymbolSearchAdapter()
 _advisory_thread: threading.Thread | None = None
@@ -63,8 +64,9 @@ def start_advisory(trigger_kind: str = "manual", *, force: bool = False) -> dict
         cached = _advisory.fresh_cached_run(force=force)
         if cached is not None:
             print(
-                f"[tradai-worker] advisory cache hit run_id={cached['run_id']} "
-                f"age={cached.get('age_seconds')}s force={force} trigger={trigger_kind}",
+                json.dumps({"service": "tradai-worker", "event": "advisory_cache_hit",
+                            "run_id": cached["run_id"], "age_seconds": cached.get("age_seconds"),
+                            "force": force, "trigger": trigger_kind}),
                 flush=True,
             )
             return cached
@@ -72,16 +74,19 @@ def start_advisory(trigger_kind: str = "manual", *, force: bool = False) -> dict
         run_id = _advisory.create_run(trigger_kind)
 
         def _job() -> None:
-            print(f"[tradai-worker] advisory run_id={run_id} starting trigger={trigger_kind}", flush=True)
+            print(json.dumps({"service": "tradai-worker", "event": "advisory_started",
+                              "run_id": run_id, "trigger": trigger_kind}), flush=True)
             try:
                 result = _advisory.run(run_id)
                 print(
-                    f"[tradai-worker] advisory run_id={run_id} status={result.get('status')} "
-                    f"recs={result.get('recommendation_count')}",
+                    json.dumps({"service": "tradai-worker", "event": "advisory_finished",
+                                "run_id": run_id, "status": result.get("status"),
+                                "recommendation_count": result.get("recommendation_count")}),
                     flush=True,
                 )
             except Exception as exc:  # noqa: BLE001
-                print(f"[tradai-worker] advisory run_id={run_id} crashed: {exc}", flush=True)
+                print(json.dumps({"service": "tradai-worker", "event": "advisory_crashed",
+                                  "run_id": run_id, "error": str(exc)}), flush=True)
 
         _advisory_thread = threading.Thread(target=_job, daemon=True, name=f"advisory-{run_id}")
         _advisory_thread.start()
@@ -108,8 +113,9 @@ def start_advisory_single(symbol: str, force: bool = False) -> dict:
         cached = _advisory.fresh_cached_run(force=force)
         if cached is not None:
             print(
-                f"[tradai-worker] advisory cache hit run_id={cached['run_id']} "
-                f"age={cached.get('age_seconds')}s force={force} trigger=manual",
+                json.dumps({"service": "tradai-worker", "event": "advisory_cache_hit",
+                            "run_id": cached["run_id"], "age_seconds": cached.get("age_seconds"),
+                            "force": force, "trigger": "manual"}),
                 flush=True,
             )
             return cached
@@ -117,16 +123,19 @@ def start_advisory_single(symbol: str, force: bool = False) -> dict:
         run_id = _advisory.create_run("manual", target_symbol=symbol)
 
         def _job() -> None:
-            print(f"[tradai-worker] advisory run_id={run_id} starting trigger=manual target={symbol}", flush=True)
+            print(json.dumps({"service": "tradai-worker", "event": "advisory_started",
+                              "run_id": run_id, "trigger": "manual", "targeted": True}), flush=True)
             try:
                 result = _advisory.run(run_id)
                 print(
-                    f"[tradai-worker] advisory run_id={run_id} status={result.get('status')} "
-                    f"recs={result.get('recommendation_count')}",
+                    json.dumps({"service": "tradai-worker", "event": "advisory_finished",
+                                "run_id": run_id, "status": result.get("status"),
+                                "recommendation_count": result.get("recommendation_count")}),
                     flush=True,
                 )
             except Exception as exc:  # noqa: BLE001
-                print(f"[tradai-worker] advisory run_id={run_id} crashed: {exc}", flush=True)
+                print(json.dumps({"service": "tradai-worker", "event": "advisory_crashed",
+                                  "run_id": run_id, "error": str(exc)}), flush=True)
 
         _advisory_thread = threading.Thread(target=_job, daemon=True, name=f"advisory-{run_id}")
         _advisory_thread.start()

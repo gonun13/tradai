@@ -121,7 +121,7 @@ function statusLabel(ok: boolean | undefined, required: boolean) {
         <label class="wide">
           Portfolio profile — the rules for what you already <em>own</em>
           <span class="sub">
-            Judges the <NuxtLink to="/">Portfolio</NuxtLink>. Position sizing, trimming, when a
+            Judges the <NuxtLink to="/portfolio">Portfolio</NuxtLink>. Position sizing, trimming, when a
             sell is warranted, tax situation.
           </span>
           <textarea

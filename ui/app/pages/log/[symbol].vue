@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import type { ConversationTurn, Recommendation } from '~/composables/useHoldingsApi'
 
+definePageMeta({
+  alias: ['/portfolio/log/:symbol', '/tracker/log/:symbol'],
+})
+
 const route = useRoute()
 const api = useHoldingsApi()
 const { message: opsMessage, error: opsError } = useGlobalOps()
@@ -74,9 +78,21 @@ const contextTracked = computed(() => {
   return tracked.find((t) => t.symbol === symbol.value) ?? null
 })
 
-const book = computed<'portfolio' | 'tracker'>(() =>
-  contextTracked.value && !contextHolding.value ? 'tracker' : 'portfolio',
-)
+const resolvedBook = computed<'portfolio' | 'tracker'>(() => {
+  const recommendationBook = primary.value?.book
+  if (recommendationBook === 'tracker' || recommendationBook === 'portfolio') {
+    return recommendationBook
+  }
+  return contextTracked.value && !contextHolding.value ? 'tracker' : 'portfolio'
+})
+
+const routeBook = computed<'portfolio' | 'tracker' | null>(() => {
+  if (route.path.startsWith('/tracker/')) return 'tracker'
+  if (route.path.startsWith('/portfolio/')) return 'portfolio'
+  return null
+})
+
+const book = computed(() => routeBook.value ?? resolvedBook.value)
 
 // Which of the two profiles (0019) was actually applied to this symbol. `context.mandates`
 // carries the resolved text per book — defaults already substituted, so this shows what the
@@ -101,11 +117,29 @@ const models = computed(() => {
 watchEffect(() => {
   useHead({ title: symbol.value ? `Log — ${symbol.value}` : 'Log' })
 })
+
+watch(
+  [pending, resolvedBook, symbol],
+  ([isPending, correctBook, currentSymbol]) => {
+    if (isPending || !currentSymbol || routeBook.value === correctBook) return
+    void navigateTo(`/${correctBook}/log/${encodeURIComponent(currentSymbol)}`, { replace: true })
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
-  <div>
-    <p class="tag">Claude ↔ Jev log — {{ symbol || '…' }}</p>
+  <div class="module-page log-page">
+    <section class="module-hero log-hero" :aria-labelledby="`log-title-${symbol}`">
+      <div>
+        <p class="module-kicker">{{ book === 'tracker' ? 'Tracker signal' : 'Portfolio decision' }}</p>
+        <h1 :id="`log-title-${symbol}`" class="module-title log-title">{{ symbol || 'Decision log' }}</h1>
+        <p class="module-description">Claude ↔ Jev research and decision trace from the latest run.</p>
+      </div>
+      <NuxtLink class="ghost module-back" :to="book === 'tracker' ? '/tracker' : '/portfolio'">
+        Back to {{ book === 'tracker' ? 'Tracker' : 'Portfolio' }}
+      </NuxtLink>
+    </section>
 
     <p v-if="opsMessage" class="ok">{{ opsMessage }}</p>
     <p v-if="opsError" class="bad">{{ opsError }}</p>
@@ -229,3 +263,22 @@ watchEffect(() => {
     </template>
   </div>
 </template>
+
+<style scoped>
+.log-hero {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.log-title {
+  font-size: clamp(2.4rem, 7vw, 4.8rem);
+}
+
+.module-back {
+  align-self: end;
+}
+
+@media (max-width: 720px) {
+  .log-hero { grid-template-columns: 1fr; }
+  .module-back { justify-self: start; }
+}
+</style>

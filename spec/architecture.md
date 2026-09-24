@@ -63,6 +63,10 @@ The implemented browser surface is Slim as the single BFF: holdings, tracker, se
 search, ingest, advisory runs, recommendations, alerts, and outcomes are exposed through Slim.
 The worker's refresh, advisory, search, and health routes remain internal to Compose.
 
+The Nuxt surface has separate `/portfolio` and `/tracker` modules (`0021`) over those shared
+interfaces. A neutral utility bar owns combined ingest/advisory controls and global alerts;
+module-specific pages and logs supply the distinct book context.
+
 ## Privacy and security constraints
 
 - Portfolio data stored LAN-only; no cloud DB.
