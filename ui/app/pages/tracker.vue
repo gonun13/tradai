@@ -228,15 +228,36 @@ const noQuoteYet = computed(() => entries.value.filter((e) => e.quote === null))
 </script>
 
 <template>
-  <div>
-    <p class="tag">Tracker — names you are considering, not names you own</p>
+  <div class="module-page tracker-page">
+    <section class="module-hero" aria-labelledby="tracker-title">
+      <div>
+        <p class="module-kicker">Research pipeline · Investor profile</p>
+        <h1 id="tracker-title" class="module-title">Tracker</h1>
+        <p class="module-description">
+          The workspace for names you are considering: explore the entry case, monitor momentum
+          and decide what deserves capital next.
+        </p>
+      </div>
+      <div class="module-metrics" aria-label="Tracker summary">
+        <div class="module-metric">
+          <span class="module-metric-label">Tracked names</span>
+          <strong>{{ entries.length }}</strong>
+        </div>
+        <div class="module-metric">
+          <span class="module-metric-label">Awaiting ingest</span>
+          <strong>{{ noQuoteYet.length }}</strong>
+        </div>
+        <div class="module-metric">
+          <span class="module-metric-label">Decision horizon</span>
+          <strong>1 · 3 · 6m</strong>
+        </div>
+      </div>
+    </section>
 
-    <p class="note">
-      Tracked names ingest quotes, bars and technicals alongside your holdings and go into the
-      same daily Claude/Jev run — judged against your <NuxtLink to="/setup">investor profile</NuxtLink>
-      rather than your portfolio rules. News is not fetched for them, so the news lens is skipped.
-      Horizons 1m / 3m / 6m — an entry-timing question, not the holdings' 6m / 12m / 24m.
-      Buying one moves it to the Portfolio tab automatically.
+    <p class="module-guide">
+      Tracked names share quote, bars and technical ingestion with holdings, then join the same
+      daily Claude/Jev run under your <NuxtLink to="/setup">investor profile</NuxtLink>. News is
+      intentionally holdings-only. Recording a purchase hands the name to Portfolio.
     </p>
 
     <p v-if="opsMessage || message" class="ok">{{ opsMessage || message }}</p>
@@ -400,8 +421,8 @@ const noQuoteYet = computed(() => entries.value.filter((e) => e.quote === null))
               </button>
               <NuxtLink
                 class="ghost icon-btn"
-                title="Record an acquisition — this moves it to the Portfolio tab"
-                :to="`/?buy=${encodeURIComponent(e.symbol)}`"
+                title="Record an acquisition — this moves it to the Portfolio module"
+                :to="`/portfolio?buy=${encodeURIComponent(e.symbol)}`"
               >
                 Bought
               </NuxtLink>

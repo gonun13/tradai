@@ -1,5 +1,5 @@
 export default defineEventHandler(async () => {
   const config = useRuntimeConfig()
   const base = String(config.apiInternalBase).replace(/\/$/, '')
-  return await $fetch(`${base}/health`)
+  return await $fetch(`${base}/health`, { timeout: 5000 })
 })

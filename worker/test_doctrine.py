@@ -54,6 +54,9 @@ print("\ncompose_mandate (0019) — the investor profile travels, the portfolio 
 profiles = {"investor": "INV", "portfolio": "PORT"}
 assert doctrine.compose_mandate(profiles, "tracker") == "INV"
 assert doctrine.compose_mandate(profiles, "portfolio") == "INV PORT"
+assert doctrine.resolved_portfolio_profile(profiles) == "PORT"
+assert doctrine.resolved_portfolio_profile({"portfolio": " PORT "}) == "PORT"
+assert doctrine.resolved_portfolio_profile({"portfolio": "  "}) == doctrine.DEFAULT_PORTFOLIO_PROFILE
 # An unwritten half falls back to its own default rather than leaking the other book's rules.
 half = doctrine.compose_mandate({"investor": None, "portfolio": "PORT"}, "tracker")
 assert half == doctrine.DEFAULT_INVESTOR_PROFILE

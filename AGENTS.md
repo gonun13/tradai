@@ -19,6 +19,7 @@ Implement and review against these docs before inventing behaviour.
 - `spec/domain.md` — entities, advisory semantics, privacy invariants
 - `spec/architecture.md` — components, stack, boundaries, NFRs
 - `spec/data.md` — persistence and entity contracts
+- `spec/ui-ux.md` — module navigation, visual identity, responsive and accessibility rules
 - `spec/behaviour/portfolio.md`
 - `spec/behaviour/tracker.md`
 - `spec/behaviour/monitoring.md`
@@ -43,6 +44,7 @@ Implement and review against these docs before inventing behaviour.
 - `spec/decisions/0018-simplify-trust-agents.md` (revises `0012`–`0017`)
 - `spec/decisions/0019-tracker-as-second-book.md` (revises `0016`; partially reverses `0018`)
 - `spec/decisions/0020-tracker-horizons-1-3-6.md` (tracker-only horizon split)
+- `spec/decisions/0021-separate-portfolio-tracker-modules.md` (separate module UX; shared operations)
 - `spec/tests.md` — acceptance checks and regression
 
 ### Extending

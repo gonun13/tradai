@@ -133,6 +133,10 @@ Ticker-level recommendations, informed by full book context when agents run. Dis
 | severity | Optional |
 | raised_at | When policy fired |
 
+The alert HTTP read model also exposes the joined Recommendation `book` (`portfolio` or
+`tracker`) so the shared alert surface can label and route into the correct module (`0021`).
+This is derived data, not another Alert persistence column.
+
 ## Relations
 
 ```

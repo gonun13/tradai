@@ -20,13 +20,13 @@ keep this?", and give a `better_use` sell (`0013`) a real named alternative to p
    already a holding is rejected with a 409 — the two books are mutually exclusive.
 4. The next ingest pulls quotes, bars and technicals for it alongside the holdings.
 5. The next daily run researches it: Claude writes an entry case, Jev decides per horizon.
-6. Recommendations appear on the Tracker tab; a `buy` raises an alert like any other.
+6. Recommendations appear in the Tracker module; a `buy` raises an alert like any other.
 
 ## Secondary flows
 
 - **Edit the note** — the only field the operator maintains after adding.
 - **Remove** — deletes the entry and its note outright.
-- **Bought it** — links to the Portfolio tab's acquisition form with the symbol prefilled.
+- **Bought it** — links to the Portfolio module's acquisition form with the symbol prefilled.
   Recording the acquisition is what archives the tracker entry.
 
 ## Rules

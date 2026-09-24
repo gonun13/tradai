@@ -61,10 +61,10 @@ EU listings generally work via yfinance without Finnhub. Rebuild after changing 
 ## First run
 
 1. Open **Setup** (`/setup`) — confirm which keys are loaded; write optional **Investor** and **Portfolio** profiles and cash / realised-gains fields.
-2. **Portfolio** — add holdings as acquisitions (symbol, venue, quantity, unit price, commission, trade date).
-3. **Tracker** — search by name or ticker and add names you are watching (with a note).
+2. **Portfolio** (`/portfolio`) — add holdings as acquisitions (symbol, venue, quantity, unit price, commission, trade date).
+3. **Tracker** (`/tracker`) — search by name or ticker and add names you are watching (with a note).
 4. **Ingest now** — quotes, bars, technicals (and holdings news when Marketaux is set).
-5. **Run now** / **Force run** — recommendations on both tabs; buy/sell rows raise in-app alerts (bell, top right).
+5. **Run now** / **Force run** — recommendations in both modules; buy/sell rows raise in-app alerts (bell, top right).
 
 Portfolio horizons are **6 / 12 / 24 months**; tracker horizons are **1 / 3 / 6 months**. The daily schedule runs after US regular close plus your offset (default 16:30 ET), at most once per ET trading day.
 

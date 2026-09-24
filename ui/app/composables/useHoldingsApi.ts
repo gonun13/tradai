@@ -347,6 +347,7 @@ export type Alert = {
   raised_at: string
   acked_at: string | null
   action: 'buy' | 'sell' | 'hold' | 'watch'
+  book: Book
   horizon: '1m' | '3m' | '6m' | '12m' | '24m'
   symbol: string
   instrument_name: string | null

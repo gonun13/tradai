@@ -1,5 +1,5 @@
 /**
- * Display helpers shared by the Portfolio and Tracker tabs (0019). Extracted from
+ * Display helpers shared by the Portfolio and Tracker modules (0019, 0021). Extracted from
  * index.vue when the tracker gained a table of its own — both books show money the same
  * way, and every figure the UI renders is EUR unless it names another currency
  * (spec/domain.md invariant 10).

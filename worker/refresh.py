@@ -24,8 +24,9 @@ def resolve_region(symbol: str, region: str | None) -> str:
 
 
 class MarketRefreshService:
-    def __init__(self, db_path: str) -> None:
+    def __init__(self, db_path: str, *, news_interval_seconds: int) -> None:
         self.db_path = db_path
+        self.news_interval_seconds = news_interval_seconds
         self.finnhub = FinnhubHistoricalAdapter(os.environ.get("FINNHUB_API_KEY", ""))
         self.yfinance = YFinanceHistoricalAdapter()
         self.fx = FrankfurterFxAdapter()
@@ -369,16 +370,15 @@ class MarketRefreshService:
             return
 
         # Free tier is 100 req/day — one book pass per day is enough; SQLite is the cache.
-        news_interval = int(os.environ.get("WORKER_NEWS_INTERVAL_SECONDS", "86400"))
         meta = conn.execute(
             "SELECT last_run_at, last_success_at, report_json FROM news_refresh_meta WHERE id = 1"
         ).fetchone()
-        if not force and news_interval > 0 and meta is not None:
+        if not force and self.news_interval_seconds > 0 and meta is not None:
             try:
                 last = str(meta["last_run_at"])
                 last_dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
                 age = (datetime.now(timezone.utc) - last_dt).total_seconds()
-                if age < news_interval:
+                if age < self.news_interval_seconds:
                     cached = {}
                     if meta["report_json"]:
                         try:
@@ -387,7 +387,7 @@ class MarketRefreshService:
                             cached = {}
                     results["news"]["skipped"] = True
                     results["news"]["reason"] = (
-                        f"cached ({int(age)}s old; refresh every {news_interval}s)"
+                        f"cached ({int(age)}s old; refresh every {self.news_interval_seconds}s)"
                     )
                     results["news"]["completed_at"] = last
                     results["news"]["fetched"] = int(cached.get("fetched") or 0)

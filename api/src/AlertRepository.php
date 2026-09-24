@@ -19,7 +19,7 @@ final class AlertRepository
     {
         $sql = <<<'SQL'
             SELECT a.*,
-                   r.action, r.horizon, r.agent_run_id, r.rationale,
+                   r.action, r.horizon, r.agent_run_id, r.rationale, r.book,
                    i.symbol, i.name AS instrument_name
             FROM alerts a
             INNER JOIN recommendations r ON r.id = a.recommendation_id
@@ -48,7 +48,7 @@ final class AlertRepository
         $stmt = $this->db->prepare(
             <<<'SQL'
             SELECT a.*,
-                   r.action, r.horizon, r.agent_run_id, r.rationale,
+                   r.action, r.horizon, r.agent_run_id, r.rationale, r.book,
                    i.symbol, i.name AS instrument_name
             FROM alerts a
             INNER JOIN recommendations r ON r.id = a.recommendation_id
@@ -94,6 +94,7 @@ final class AlertRepository
             'raised_at' => $row['raised_at'],
             'acked_at' => $row['acked_at'] ?? null,
             'action' => $row['action'],
+            'book' => $row['book'] ?? 'portfolio',
             'horizon' => $row['horizon'],
             'symbol' => $row['symbol'],
             'instrument_name' => $row['instrument_name'],

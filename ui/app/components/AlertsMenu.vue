@@ -37,6 +37,10 @@ function close() {
   open.value = false
 }
 
+function alertPath(a: Alert) {
+  return `/${a.book || 'portfolio'}/log/${encodeURIComponent(a.symbol)}`
+}
+
 async function ackAlert(a: Alert) {
   ackError.value = ''
   try {
@@ -127,7 +131,12 @@ defineExpose({ refresh })
       <ul v-else class="alerts">
         <li v-for="a in activeAlerts" :key="a.id" :class="{ unread: a.unread }">
           <div>
-            <strong>{{ a.symbol }}</strong>
+            <NuxtLink class="alert-symbol" :to="alertPath(a)" @click="close">
+              <strong>{{ a.symbol }}</strong>
+            </NuxtLink>
+            <span class="book-chip" :data-book="a.book || 'portfolio'">
+              {{ a.book || 'portfolio' }}
+            </span>
             <span class="pill" :data-action="a.action">{{ a.horizon }} {{ a.action }}</span>
             <span class="sub">
               {{ a.raised_at }}
@@ -255,5 +264,29 @@ defineExpose({ refresh })
 .rationale {
   margin: 0.35rem 0 0;
   font-size: 0.9rem;
+}
+
+.alert-symbol {
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.alert-symbol:hover { color: var(--accent); }
+
+.book-chip {
+  display: inline-block;
+  margin: 0 0.3rem;
+  padding: 0.1rem 0.35rem;
+  border: 1px solid #b9c0bb;
+  color: #59615b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.book-chip[data-book="tracker"] {
+  border-color: #9bafd0;
+  color: #31568e;
 }
 </style>

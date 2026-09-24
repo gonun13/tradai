@@ -21,7 +21,7 @@ Near-live dashboard view of holdings with market context. Polling delayed or nea
 ### Dashboard glance
 
 1. Operator opens the UI.
-2. Sees holdings + latest available quotes (**money in EUR**), and on the Tracker tab the same for names
+2. Sees holdings + latest available quotes (**money in EUR**), and in the Tracker module the same for names
    being considered — price, 1m/3m momentum and RSI, with no cost basis to show.
 3. Sees recent recommendations / alerts summary without opening a separate “pro terminal.”
 
