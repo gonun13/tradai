@@ -32,7 +32,9 @@ final class TrackerRepository
                     t.archived_at,
                     i.currency, i.kind, i.region, i.mic, i.isin, i.name AS instrument_name,
                     q.price AS quote_price, q.currency AS quote_currency, q.as_of AS quote_as_of,
-                    tech.features_json,
+                    q.source AS quote_source, q.updated_at AS quote_updated_at,
+                    tech.features_json, tech.as_of AS technicals_as_of,
+                    tech.source AS technicals_source, tech.updated_at AS technicals_updated_at,
                     f.payload_json AS fundamentals_json, f.source AS fundamentals_source,
                     f.as_of AS fundamentals_as_of,
                     f.completeness_state AS fundamentals_state,
@@ -269,11 +271,18 @@ final class TrackerRepository
                 'price' => $price,
                 'currency' => $currency,
                 'as_of' => $r['quote_as_of'],
+                'source' => $r['quote_source'],
+                'updated_at' => $r['quote_updated_at'],
             ] : null,
             // There is no cost basis to show for an unowned name, so the EUR figure the
             // Tracker table renders is just the quote converted (0010: UI is always EUR).
             'price_eur' => $price !== null && $rate !== null ? round($price * $rate, 4) : null,
-            'technicals' => $this->compactTechnicals($features),
+            'technicals' => $features !== [] ? [
+                'as_of' => $r['technicals_as_of'],
+                'source' => $r['technicals_source'],
+                'updated_at' => $r['technicals_updated_at'],
+                'features' => $features,
+            ] : null,
             'fundamentals' => $this->mapFundamentals($r),
             'news' => $this->newsForInstrument((int) $r['instrument_id']),
         ];
@@ -307,7 +316,7 @@ final class TrackerRepository
              INNER JOIN news_item_instruments nii ON nii.news_item_id = n.id
              WHERE nii.instrument_id = :id
              ORDER BY COALESCE(n.published_at, n.fetched_at) DESC
-             LIMIT 3'
+             LIMIT 5'
         );
         $stmt->execute(['id' => $instrumentId]);
         return array_map(static fn (array $row): array => [
@@ -320,22 +329,6 @@ final class TrackerRepository
             'published_at' => $row['published_at'],
             'fetched_at' => $row['fetched_at'],
         ], $stmt->fetchAll());
-    }
-
-    /**
-     * @param array<string, mixed> $features
-     * @return array<string, mixed>|null
-     */
-    private function compactTechnicals(array $features): ?array
-    {
-        $keys = ['rsi_14', 'sma_20', 'sma_50', 'return_1m_pct', 'return_3m_pct', 'return_6m_pct', 'last_close'];
-        $out = [];
-        foreach ($keys as $key) {
-            if (isset($features[$key])) {
-                $out[$key] = $features[$key];
-            }
-        }
-        return $out === [] ? null : $out;
     }
 
     private function nullableString(mixed $value): ?string

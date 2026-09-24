@@ -96,7 +96,7 @@ $app->get('/', function (Request $request, Response $response) use ($json): Resp
             'POST /holdings',
             'PUT /holdings/{id}',
             'DELETE /holdings/{id}',
-            'GET /context/preview',
+            'GET /context/preview?book=portfolio|tracker',
             'GET /ingest/report',
             'POST /refresh/market',
             'POST /agent/run',
@@ -182,27 +182,40 @@ $app->get('/setup', function (Request $request, Response $response) use ($json):
     ]);
 });
 
-$app->get('/context/preview', function (Request $request, Response $response) use ($json, $holdings): Response {
-    $rows = $holdings->all();
+$app->get('/context/preview', function (Request $request, Response $response) use ($json, $holdings, $tracker): Response {
+    $book = strtolower(trim((string) ($request->getQueryParams()['book'] ?? 'portfolio')));
+    if (!in_array($book, ['portfolio', 'tracker'], true)) {
+        throw new \InvalidArgumentException('book must be portfolio or tracker');
+    }
+
+    $rows = $book === 'portfolio' ? $holdings->all() : $tracker->all();
     $preview = [];
-    foreach ($rows as $h) {
-        $features = $h['technicals']['features'] ?? null;
+    foreach ($rows as $row) {
+        $features = $row['technicals']['features'] ?? null;
+        $quote = $row['quote'] ?? null;
+        $instrument = $book === 'portfolio' ? $row['instrument'] : ($row['instrument'] ?? []);
         $preview[] = [
-            'symbol' => $h['instrument']['symbol'],
-            'name' => $h['instrument']['name'],
-            'quantity' => $h['quantity'],
-            'cost_eur' => $h['cost_eur'],
-            'market_value_eur' => $h['market_value_eur'],
-            'pnl_pct' => $h['pnl_pct'],
-            'fundamentals' => $h['fundamentals'] ?? null,
-            'technicals' => $features,
-            'news' => $h['news'] ?? [],
+            'book' => $book,
+            'symbol' => $book === 'portfolio' ? $instrument['symbol'] : $row['symbol'],
+            'name' => $book === 'portfolio' ? $instrument['name'] : $row['name'],
+            'historical' => [
+                'quote' => $quote,
+                'bars' => is_array($features) ? [
+                    'count' => isset($features['bar_count']) ? (int) $features['bar_count'] : null,
+                    'last_close' => isset($features['last_close']) ? (float) $features['last_close'] : null,
+                    'as_of' => $features['as_of_bar'] ?? ($row['technicals']['as_of'] ?? null),
+                ] : null,
+            ],
+            'fundamentals' => $row['fundamentals'] ?? null,
+            'technicals' => $row['technicals'] ?? null,
+            'news' => $row['news'] ?? [],
         ];
     }
 
     return $json($response, [
         'ok' => true,
         'stage' => '7',
+        'book' => $book,
         'display_currency' => 'EUR',
         'instruments' => $preview,
     ]);

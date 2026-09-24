@@ -77,7 +77,8 @@ cp .env.example .env   # if needed
    Fundamentals, Technicals, and News; `/ingest/report` retains the same statistics plus
    missing counts and the Historical quote/bars breakdown
 4. Force news: `docker compose exec worker curl -fsS -X POST 'http://api:8080/refresh/market?force_news=1'`
-5. Optional: `docker compose exec worker curl -fsS http://api:8080/context/preview`
+5. `docker compose exec worker curl -fsS 'http://api:8080/context/preview?book=portfolio'`
+   and `?book=tracker` return book-scoped Historical, Fundamentals, Technicals and News snapshots
 
 ### Agent advisory (`behaviour/agent-advisory.md`, `0009`)
 
@@ -139,6 +140,8 @@ docker compose exec worker python test_persist_e2e.py
 5. The global alert menu labels each alert `portfolio` or `tracker`; its symbol link opens the corresponding module log and Ack still works.
 6. At desktop and narrow viewports, tables scroll instead of clipping, the utility bar wraps/stacks, focus is visible and all controls are keyboard reachable.
 7. Capture screenshots of both modules at desktop and narrow widths for stakeholder visual review.
+8. Both modules show an Agent context preview after recommendations. Every ticker is closed by
+   default; opening one reveals three columns (Historical, Fundamentals, Technicals) and a News row.
 
 ## Full happy path (release)
 
