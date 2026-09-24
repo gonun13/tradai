@@ -1,24 +1,29 @@
 <script setup lang="ts">
-import type { PortfolioSettings, SetupKeys, SetupSchedule } from '~/composables/useHoldingsApi'
+import type { PortfolioSettings, SetupKeys } from '~/composables/useHoldingsApi'
 
 const api = useHoldingsApi()
-const { message: opsMessage, error: opsError } = useGlobalOps()
 
 const { data, pending, refresh, error } = await useAsyncData('setup-status', () => api.setupStatus())
 
-// --- 0019: two free-text profiles Claude and Jev read verbatim on every run. The investor
-// profile judges names you don't own (the Tracker) and travels as context everywhere; the
-// portfolio profile carries the rules for what you already hold.
 const settings = ref<PortfolioSettings | null>(null)
 const investorText = ref('')
 const portfolioText = ref('')
 const cashInput = ref('')
 const realizedInput = ref('')
-const profileMessage = ref('')
-const profileError = ref('')
-const profileBusy = ref(false)
+const profilesLoading = ref(true)
 
-async function loadProfile() {
+const portfolioMessage = ref('')
+const portfolioError = ref('')
+const portfolioBusy = ref(false)
+const trackerMessage = ref('')
+const trackerError = ref('')
+const trackerBusy = ref(false)
+
+async function loadProfiles() {
+  profilesLoading.value = true
+  portfolioError.value = ''
+  trackerError.value = ''
+
   try {
     const res = await api.getSettings()
     settings.value = res.settings
@@ -30,191 +35,568 @@ async function loadProfile() {
         ? ''
         : String(res.settings.realized_gains_ytd_override_eur)
   } catch (e) {
-    profileError.value = e instanceof Error ? e.message : String(e)
+    const message = e instanceof Error ? e.message : String(e)
+    portfolioError.value = message
+    trackerError.value = message
+  } finally {
+    profilesLoading.value = false
   }
 }
 
-async function saveProfile() {
-  profileBusy.value = true
-  profileMessage.value = ''
-  profileError.value = ''
+function optionalNumber(value: string) {
+  return value === '' ? null : Number(value)
+}
+
+async function savePortfolio() {
+  portfolioBusy.value = true
+  portfolioMessage.value = ''
+  portfolioError.value = ''
+
+  try {
+    const res = await api.saveSettings({
+      portfolio_profile_text: portfolioText.value,
+      cash_eur: optionalNumber(cashInput.value),
+      realized_gains_ytd_override_eur: optionalNumber(realizedInput.value),
+    })
+    settings.value = res.settings
+    portfolioMessage.value = 'Portfolio saved for the next advisory run.'
+  } catch (e) {
+    portfolioError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    portfolioBusy.value = false
+  }
+}
+
+async function saveTracker() {
+  trackerBusy.value = true
+  trackerMessage.value = ''
+  trackerError.value = ''
+
   try {
     const res = await api.saveSettings({
       investor_profile_text: investorText.value,
-      portfolio_profile_text: portfolioText.value,
-      cash_eur: cashInput.value === '' ? null : Number(cashInput.value),
-      realized_gains_ytd_override_eur: realizedInput.value === '' ? null : Number(realizedInput.value),
     })
     settings.value = res.settings
-    profileMessage.value = 'Saved — Claude and Jev use this on the next run.'
+    trackerMessage.value = 'Investor profile saved for the next advisory run.'
   } catch (e) {
-    profileError.value = e instanceof Error ? e.message : String(e)
+    trackerError.value = e instanceof Error ? e.message : String(e)
   } finally {
-    profileBusy.value = false
+    trackerBusy.value = false
   }
 }
 
-onMounted(loadProfile)
+onMounted(loadProfiles)
 
 const keys = computed<SetupKeys | null>(() => data.value?.keys ?? null)
-const schedule = computed<SetupSchedule | null>(() => data.value?.schedule ?? null)
-const docs = computed(() => data.value?.docs ?? {})
-const warnings = computed(() => data.value?.warnings ?? [])
 
-const rows: Array<{ key: keyof SetupKeys; label: string; required: boolean; docKey: string }> = [
-  { key: 'finnhub', label: 'FINNHUB_API_KEY', required: false, docKey: 'finnhub' },
-  { key: 'marketaux', label: 'MARKETAUX_API_TOKEN', required: false, docKey: 'marketaux' },
-  { key: 'typesafe', label: 'TYPESAFE_API_KEY', required: true, docKey: 'typesafe' },
-  { key: 'claude_oauth', label: 'CLAUDE_CODE_OAUTH_TOKEN', required: true, docKey: 'claude' },
-  { key: 'fmp', label: 'FMP_API_KEY (optional)', required: false, docKey: 'fmp' },
-]
+type ServiceStatus = 'Ready' | 'Needs attention' | 'Connected' | 'Not connected — optional'
 
-function statusLabel(ok: boolean | undefined, required: boolean) {
-  if (ok) {
-    return 'set'
-  }
-  return required ? 'missing' : 'optional — unset'
+const services = computed<
+  Array<{ key: 'claude' | 'jev' | 'finnhub' | 'marketaux' | 'fmp'; name: string; status: ServiceStatus }>
+>(() => {
+  if (!keys.value) return []
+
+  return [
+    {
+      key: 'claude',
+      name: 'Claude research',
+      status:
+        keys.value.claude_oauth && !keys.value.anthropic_api_key_set ? 'Ready' : 'Needs attention',
+    },
+    {
+      key: 'jev',
+      name: 'Jev decisions',
+      status: keys.value.typesafe ? 'Ready' : 'Needs attention',
+    },
+    {
+      key: 'finnhub',
+      name: 'Finnhub',
+      status: keys.value.finnhub ? 'Connected' : 'Not connected — optional',
+    },
+    {
+      key: 'marketaux',
+      name: 'Marketaux',
+      status: keys.value.marketaux ? 'Connected' : 'Not connected — optional',
+    },
+    {
+      key: 'fmp',
+      name: 'FMP',
+      status: keys.value.fmp ? 'Connected' : 'Not connected — optional',
+    },
+  ]
+})
+
+const billingConflict = computed(() => keys.value?.anthropic_api_key_set === true)
+
+function serviceTone(status: ServiceStatus) {
+  if (status === 'Ready' || status === 'Connected') return 'ready'
+  if (status === 'Needs attention') return 'attention'
+  return 'optional'
 }
 </script>
 
 <template>
-  <div>
-    <p class="tag">Setup — profiles &amp; keys</p>
-
-    <p class="note">
-      Keys live in the host <code>.env</code> (never typed into the browser). Edit, then
-      <code>bin/up -d</code>. {{ docs.env_file }}
-    </p>
-
-    <p v-if="opsMessage" class="ok">{{ opsMessage }}</p>
-    <p v-if="opsError || error" class="bad">{{ opsError || error }}</p>
-    <p v-for="(w, i) in warnings" :key="i" class="bad">{{ w }}</p>
-
-    <section class="panel">
-      <h1>Profiles</h1>
-      <p class="mute">
-        Two fields, written once in your own words. Claude and Jev read them verbatim on every
-        run and reason with them; nothing in Tradai validates or overrides their calls.
+  <div class="setup-page">
+    <header class="setup-heading">
+      <p class="setup-kicker">Setup</p>
+      <h1>Shape how each book is advised.</h1>
+      <p>
+        Keep the two mandates distinct. Save either book without changing the other.
       </p>
-      <p v-if="profileMessage" class="ok">{{ profileMessage }}</p>
-      <p v-if="profileError" class="bad">{{ profileError }}</p>
+    </header>
 
-      <p v-if="!investorText" class="mute warn">
-        Your investor profile is empty, so tracked names are judged by a generic default.
-        Write it before trusting the first Tracker recommendations.
-      </p>
-
-      <div class="form">
-        <label class="wide">
-          Investor profile — who you are, and what makes a name worth <em>buying</em>
-          <span class="sub">
-            Judges the <NuxtLink to="/tracker">Tracker</NuxtLink>, and travels as context on
-            every call. Objective, time horizon, risk tolerance, what you want to own and why.
-          </span>
-          <textarea
-            v-model="investorText"
-            rows="4"
-            placeholder="e.g. Compounding over 5+ years, moderate risk. I want businesses I can explain in a sentence, bought at a price that doesn't already assume the good outcome. No turnarounds I can't check."
-          ></textarea>
-        </label>
-
-        <label class="wide">
-          Portfolio profile — the rules for what you already <em>own</em>
-          <span class="sub">
-            Judges the <NuxtLink to="/portfolio">Portfolio</NuxtLink>. Position sizing, trimming, when a
-            sell is warranted, tax situation.
-          </span>
-          <textarea
-            v-model="portfolioText"
-            rows="4"
-            placeholder="e.g. Portugal tax resident — prefer not to realise a loss unless it offsets a gain this year or the position looks unlikely to recover within a couple of years. A buy doesn't require a sell; the cash reserve is there to be used."
-          ></textarea>
-        </label>
-
-        <label>
-          Cash reserve (EUR)
-          <input v-model="cashInput" type="number" step="0.01" placeholder="e.g. 3500" >
-        </label>
-        <label>
-          Gains realised elsewhere this year (EUR)
-          <input v-model="realizedInput" type="number" step="0.01" placeholder="optional" >
-        </label>
-        <div class="wide actions">
-          <button :disabled="profileBusy" @click="saveProfile">Save</button>
-          <span v-if="settings" class="mute">
-            Realised this year: {{ settings.realized_gains_ytd_eur }} € ({{ settings.calendar_year }})
-          </span>
+    <div class="book-grid">
+      <section class="book-card portfolio-card" aria-labelledby="portfolio-setup-title">
+        <div class="book-card-heading">
+          <p class="book-label">Owned capital</p>
+          <h2 id="portfolio-setup-title">Portfolio</h2>
+          <p>
+            Adds sizing, trimming, selling, and tax rules for positions you already own.
+          </p>
         </div>
+
+        <form class="book-form" @submit.prevent="savePortfolio">
+          <p v-if="profilesLoading" class="form-state" role="status">Loading portfolio…</p>
+          <p v-if="portfolioMessage" class="form-state success" role="status">
+            {{ portfolioMessage }}
+          </p>
+          <p v-if="portfolioError" class="form-state failure" role="alert">
+            {{ portfolioError }}
+          </p>
+
+          <label>
+            Portfolio profile
+            <span class="field-hint">
+              Your rules for position size, trimming, selling, and tax decisions.
+            </span>
+            <textarea
+              v-model="portfolioText"
+              rows="6"
+              :disabled="profilesLoading || portfolioBusy"
+              placeholder="Describe how you manage positions once you own them."
+            ></textarea>
+          </label>
+
+          <div class="money-fields">
+            <label>
+              Cash reserve (EUR)
+              <input
+                v-model="cashInput"
+                type="number"
+                step="0.01"
+                :disabled="profilesLoading || portfolioBusy"
+                placeholder="0.00"
+              >
+            </label>
+            <label>
+              Realised gains elsewhere (EUR)
+              <input
+                v-model="realizedInput"
+                type="number"
+                step="0.01"
+                :disabled="profilesLoading || portfolioBusy"
+                placeholder="0.00"
+              >
+            </label>
+          </div>
+
+          <div class="realised-total" aria-live="polite">
+            <span>Calculated realised total</span>
+            <strong v-if="settings">
+              {{ settings.realized_gains_ytd_eur }} €
+              <small>{{ settings.calendar_year }}</small>
+            </strong>
+            <strong v-else>—</strong>
+          </div>
+
+          <button type="submit" :disabled="profilesLoading || portfolioBusy">
+            {{ portfolioBusy ? 'Saving portfolio…' : 'Save portfolio' }}
+          </button>
+        </form>
+      </section>
+
+      <section class="book-card tracker-card" aria-labelledby="tracker-setup-title">
+        <div class="book-card-heading">
+          <p class="book-label">Research pipeline</p>
+          <h2 id="tracker-setup-title">Tracker</h2>
+          <p>
+            The investor profile sets the Tracker buying lens and accompanies all advice.
+          </p>
+        </div>
+
+        <form class="book-form" @submit.prevent="saveTracker">
+          <p v-if="profilesLoading" class="form-state" role="status">Loading investor profile…</p>
+          <p v-if="trackerMessage" class="form-state success" role="status">
+            {{ trackerMessage }}
+          </p>
+          <p v-if="trackerError" class="form-state failure" role="alert">
+            {{ trackerError }}
+          </p>
+          <p v-if="!profilesLoading && !investorText" class="empty-warning">
+            Your investor profile is empty. Tracker names use a generic buying lens until you
+            add one.
+          </p>
+
+          <label>
+            Investor profile
+            <span class="field-hint">
+              Who you are, what you want to own, and what makes a name worth buying.
+            </span>
+            <textarea
+              v-model="investorText"
+              rows="6"
+              :disabled="profilesLoading || trackerBusy"
+              placeholder="Describe your goals, horizon, risk tolerance, and buying criteria."
+            ></textarea>
+          </label>
+
+          <button type="submit" :disabled="profilesLoading || trackerBusy">
+            {{ trackerBusy ? 'Saving investor profile…' : 'Save investor profile' }}
+          </button>
+        </form>
+      </section>
+    </div>
+
+    <section class="service-panel" aria-labelledby="service-status-title">
+      <div class="service-heading">
+        <div>
+          <p class="setup-kicker">Connections</p>
+          <h2 id="service-status-title">Service status</h2>
+        </div>
+        <button type="button" class="ghost" :disabled="pending" @click="refresh()">
+          {{ pending ? 'Checking…' : 'Check again' }}
+        </button>
       </div>
-    </section>
 
-    <section class="panel">
-      <div class="list-head">
-        <h1>API keys &amp; tokens</h1>
-        <button type="button" class="ghost" :disabled="pending" @click="refresh()">Reload</button>
-      </div>
-      <p v-if="pending" class="mute">Loading…</p>
-      <table v-else-if="keys">
-        <thead>
-          <tr>
-            <th>Variable</th>
-            <th>Status</th>
-            <th>Where</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="row in rows" :key="row.key">
-            <td><code>{{ row.label }}</code></td>
-            <td :class="{ ok: keys[row.key], bad: row.required && !keys[row.key] }">
-              {{ statusLabel(keys[row.key], row.required) }}
-            </td>
-            <td class="mute">{{ docs[row.docKey] || '—' }}</td>
-          </tr>
-          <tr>
-            <td><code>ANTHROPIC_API_KEY</code></td>
-            <td :class="{ bad: keys.anthropic_api_key_set, ok: !keys.anthropic_api_key_set }">
-              {{ keys.anthropic_api_key_set ? 'SET — unset it' : 'unset (good)' }}
-            </td>
-            <td class="mute">{{ docs.claude }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </section>
-
-    <section v-if="schedule" class="panel">
-      <h1>Daily advisory schedule</h1>
-      <p class="mute">
-        After US regular close (<code>{{ schedule.us_close }}</code>
-        {{ schedule.timezone }}), wait
-        <strong>{{ schedule.after_us_close_minutes }}</strong> minutes → fire at
-        <strong>{{ schedule.fire_at_et }} ET</strong>. Weekends and listed NYSE holidays are skipped.
+      <p v-if="error" class="form-state failure" role="alert">
+        Service status could not be checked. {{ error }}
       </p>
-      <p class="mute">
-        Cache window: {{ schedule.interval_seconds }}s · scenario rounds:
-        {{ schedule.max_scenario_rounds }} · override via
-        <code>ADVISORY_AFTER_US_CLOSE_MINUTES</code> in <code>.env</code>.
-      </p>
-    </section>
+      <p v-else-if="pending && !keys" class="form-state" role="status">Checking services…</p>
 
-    <section class="panel">
-      <h1>Alert policy</h1>
-      <p class="mute">
-        Unread in-app alerts are raised when a recommendation action is
-        <strong>buy</strong> or <strong>sell</strong> (any horizon), or when Claude reports a
-        holding's thesis as broken. That covers a tracked name Jev says to buy now. Ack clears
-        unread. Hold / watch / drop stay on the recommendations panel only.
+      <ul v-else class="service-list">
+        <li v-for="service in services" :key="service.key">
+          <span>{{ service.name }}</span>
+          <strong class="service-state" :data-tone="serviceTone(service.status)">
+            {{ service.status }}
+          </strong>
+        </li>
+      </ul>
+
+      <p v-if="billingConflict" class="billing-warning" role="alert">
+        Anthropic API billing is configured. Claude research should use subscription access.
       </p>
     </section>
   </div>
 </template>
 
 <style scoped>
-textarea {
+.setup-page {
+  max-width: 86rem;
+  margin: 0 auto;
+}
+
+.setup-heading {
+  max-width: 48rem;
+  margin-bottom: 2rem;
+}
+
+.setup-kicker,
+.book-label {
+  margin: 0 0 0.5rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.setup-kicker {
+  color: var(--mute);
+}
+
+.setup-heading h1 {
+  margin: 0;
+  font-size: clamp(2rem, 5vw, 3.8rem);
+  letter-spacing: -0.045em;
+  line-height: 1;
+}
+
+.setup-heading > p:last-child {
+  margin: 0.9rem 0 0;
+  color: var(--mute);
+  font-size: 1.05rem;
+  line-height: 1.5;
+}
+
+.book-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(1rem, 2.5vw, 2rem);
+  align-items: stretch;
+}
+
+.book-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: clamp(1.25rem, 3vw, 2rem);
+  border: 1px solid var(--card-line);
+  background: var(--card-background);
+  color: var(--card-ink);
+  box-shadow: 0 18px 45px rgba(24, 35, 30, 0.06);
+}
+
+.portfolio-card {
+  --card-ink: #17231e;
+  --card-muted: #58675f;
+  --card-accent: #2b6751;
+  --card-accent-strong: #174634;
+  --card-line: #bfcdbf;
+  --card-background: rgba(248, 248, 239, 0.9);
+  border-left: 0.45rem solid var(--card-accent);
+}
+
+.tracker-card {
+  --card-ink: #17233a;
+  --card-muted: #59667b;
+  --card-accent: #4167a6;
+  --card-accent-strong: #25487f;
+  --card-line: #c0cee2;
+  --card-background: rgba(245, 248, 253, 0.92);
+  border-top: 0.45rem solid var(--card-accent);
+  border-radius: 0 0 1.25rem 1.25rem;
+}
+
+.book-label {
+  color: var(--card-accent);
+}
+
+.book-card h2 {
+  margin: 0;
+  color: var(--card-accent-strong);
+  font-size: clamp(2rem, 4vw, 3.25rem);
+  letter-spacing: -0.045em;
+  line-height: 1;
+}
+
+.book-card-heading > p:last-child {
+  min-height: 3rem;
+  margin: 0.8rem 0 0;
+  color: var(--card-muted);
+  line-height: 1.5;
+}
+
+.book-form {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.book-form label {
+  color: var(--card-ink);
+  font-weight: 600;
+}
+
+.field-hint {
+  min-height: 2.2rem;
+  color: var(--card-muted);
+  font-size: 0.84rem;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+.book-form textarea,
+.book-form input {
+  width: 100%;
+  border-color: var(--card-line);
+}
+
+.book-form textarea {
+  min-height: 9.5rem;
+  padding: 0.65rem 0.75rem;
+  color: var(--card-ink);
   font: inherit;
-  padding: 0.45rem 0.6rem;
-  border: 1px solid var(--line);
-  background: #fff;
-  color: var(--ink);
+  line-height: 1.45;
   resize: vertical;
+}
+
+.book-form textarea:focus-visible,
+.book-form input:focus-visible,
+.book-form button:focus-visible {
+  outline-color: color-mix(in srgb, var(--card-accent) 42%, transparent);
+}
+
+.book-form button {
+  align-self: flex-start;
+  margin-top: auto;
+  border-color: var(--card-accent);
+  background: var(--card-accent);
+}
+
+.money-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.realised-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.8rem 0;
+  border-block: 1px solid var(--card-line);
+  color: var(--card-muted);
+}
+
+.realised-total strong {
+  color: var(--card-accent-strong);
+  white-space: nowrap;
+}
+
+.realised-total small {
+  margin-left: 0.25rem;
+  color: var(--card-muted);
+  font-weight: 400;
+}
+
+.form-state,
+.empty-warning,
+.billing-warning {
+  margin: 0;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--line);
+  line-height: 1.4;
+}
+
+.form-state {
+  color: var(--mute);
+}
+
+.success {
+  border-color: #86ae98;
+  background: #edf6f0;
+  color: #245c3e;
+}
+
+.failure,
+.billing-warning {
+  border-color: #c99595;
+  background: #faeeee;
+  color: #762929;
+}
+
+.empty-warning {
+  border-color: #cfad75;
+  background: #fff7e8;
+  color: #704915;
+}
+
+.service-panel {
+  max-width: 60rem;
+  margin: 2rem auto 0;
+  padding: clamp(1.1rem, 2.5vw, 1.6rem);
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.service-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.service-heading h2 {
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+.service-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.service-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  min-width: 0;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.service-list li:nth-child(odd) {
+  padding-right: 1.25rem;
+}
+
+.service-list li:nth-child(even) {
+  padding-left: 1.25rem;
+  border-left: 1px solid var(--line);
+}
+
+.service-state {
+  font-size: 0.86rem;
+  font-weight: 600;
+  text-align: right;
+}
+
+.service-state[data-tone='ready'] {
+  color: var(--ok);
+}
+
+.service-state[data-tone='attention'] {
+  color: var(--bad);
+}
+
+.service-state[data-tone='optional'] {
+  color: var(--mute);
+  font-weight: 400;
+}
+
+.billing-warning {
+  margin-top: 1rem;
+}
+
+@media (max-width: 800px) {
+  .book-grid,
+  .service-list {
+    grid-template-columns: 1fr;
+  }
+
+  .book-card-heading > p:last-child,
+  .field-hint {
+    min-height: 0;
+  }
+
+  .service-list li:nth-child(odd),
+  .service-list li:nth-child(even) {
+    padding-inline: 0;
+    border-left: 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .money-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .service-heading,
+  .service-list li,
+  .realised-total {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .service-state {
+    text-align: left;
+  }
 }
 </style>
