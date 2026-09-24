@@ -30,7 +30,7 @@ Audience: engineering. Structure, boundaries, and constraints for a solo, local 
 | **Slim PHP API** | Local HTTP API: holdings CRUD, read models for dashboard, alert ack, trigger “run now”. Owns portfolio writes. |
 | **SQLite** | Single-node state on a Docker volume: portfolio, cached bars, agent runs, recommendations, alerts. |
 | **Python worker** | Scheduled ingestion + analysis. Computes technicals locally; calls market/news APIs; invokes Claude Agent CLI + Jev with **full portfolio context** for decisions. Writes results via API or shared DB. |
-| **Scheduler** | `cron` (or Compose `ofelia` / simple loop) inside Docker — quote refresh during relevant market hours; **agent advisory once per day after US markets close**. |
+| **Scheduler** | Worker loop with persisted per-instrument due state — quotes 15m, bars/news daily, fundamentals 7d, technicals on bar change; **agent advisory once per day after US markets close**. |
 
 ## Client vs server vs background
 
@@ -48,14 +48,14 @@ Audience: engineering. Structure, boundaries, and constraints for a solo, local 
 | Claude Agent CLI (subscription auth) + Jev | No `ANTHROPIC_API_KEY` in worker env (it wins precedence and switches to API billing) |
 | SQLite on named Docker volume | All durable state |
 | Docker Compose | UI, API, worker, volume, scheduler |
-| Market data | Separate adapters by **capability × region** (Historical, News, Fundamentals, FX) — see `decisions/0006-market-data-adapters.md`. Implemented MVP mix: Finnhub (US history), yfinance (EU history and fallback bars), Marketaux (news), and Frankfurter (FX). Fundamentals are deferred; `FMP_API_KEY` is surfaced for future use but is not consumed by the worker. Optional IBKR quotes remain stubbed. |
+| Market data | Four outcome-oriented registries (`0022`): Historical, Fundamentals, Technicals, and News. Each operation selects one complete provider response or one best partial without merging. Frankfurter FX is auxiliary. See `source-matrix-v1.md`. |
 | News | Marketaux (US + EU); Finnhub US news as backup |
 | Technicals | Local compute (e.g. pandas-ta or equivalent) from OHLCV |
 
 ## Interfaces (coarse)
 
 - **Browser → Slim:** holdings CRUD, dashboard read models, alert acknowledge, manual “run now.”
-- **Worker → market/news/FX APIs:** via capability adapters — quotes, bars, headlines, light fundamentals, EUR FX rates.
+- **Worker → market/news/FX APIs:** ordered per-operation adapter registries for quotes, bars, headlines, and light fundamentals; local technicals; independent EUR FX.
 - **Worker → Claude Agent CLI / Jev:** orchestrated **researcher/decider** loop with full portfolio context — Claude builds lensed Jev requests and may iterate scenarios; Jev returns typed decisions (`0009`). Not a one-shot rationale→decision call.
 - **Worker → Slim or shared SQLite:** persist AgentRun (incl. research + info-needs), Recommendation (combined action, supporting lenses, conversation), Alert, cached bars.
 
@@ -82,7 +82,7 @@ module-specific pages and logs supply the distinct book context.
 | Scale | Single user; dozens–low hundreds of instruments — not market-wide scanning |
 | Availability | Best-effort while the home machine is on; no SLA |
 | Latency | Quote refresh: seconds–minutes (delayed OK). Agent runs: minutes, async |
-| Offline | Not required; cached bars should still render if APIs flake |
+| Offline | Not required; a fresher or more complete cached dataset is never overwritten by a worse provider response |
 | i18n | Not required for MVP |
 
 ## Assumptions carried from design

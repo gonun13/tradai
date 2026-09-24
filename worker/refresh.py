@@ -1,37 +1,64 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any, Callable
 
-from adapters.errors import SymbolNotFoundError
+from adapters.base import CandidateResult, Selection, select_first_complete
 from adapters.finnhub import FinnhubHistoricalAdapter
+from adapters.finnhub_news import FinnhubNewsAdapter
 from adapters.frankfurter import FrankfurterFxAdapter
+from adapters.fundamentals import FmpFundamentalsAdapter, YFinanceFundamentalsAdapter
 from adapters.ibkr_stub import IbkrHistoricalAdapter
+from adapters.local_technicals import LocalTechnicalsAdapter
 from adapters.marketaux import MarketauxNewsAdapter
+from adapters.rate_state import PersistentRateLimiter
 from adapters.yfinance_hist import YFinanceHistoricalAdapter
-from technicals import BarClose, compute_features
+from ingestion import (
+    cache_wins,
+    evaluate_bars,
+    evaluate_fundamentals,
+    evaluate_news,
+    evaluate_quote,
+    evaluate_technicals,
+)
+from technicals import BarClose
+
+QUOTE_CADENCE = 15 * 60
+BARS_CADENCE = 24 * 60 * 60
+NEWS_CADENCE = 24 * 60 * 60
+FUNDAMENTALS_CADENCE = 7 * 24 * 60 * 60
+FX_CADENCE = 12 * 60 * 60
 
 
 def resolve_region(symbol: str, region: str | None) -> str:
     if region in ("eu", "us"):
         return region
-    if "." in symbol:
-        return "eu"
-    return "us"
+    return "eu" if "." in symbol else "us"
 
 
 class MarketRefreshService:
-    def __init__(self, db_path: str, *, news_interval_seconds: int) -> None:
+    """Four independently due layers over ordered, outcome-oriented adapter registries."""
+
+    def __init__(self, db_path: str, *, news_interval_seconds: int = NEWS_CADENCE) -> None:
         self.db_path = db_path
-        self.news_interval_seconds = news_interval_seconds
-        self.finnhub = FinnhubHistoricalAdapter(os.environ.get("FINNHUB_API_KEY", ""))
+        self.news_interval_seconds = news_interval_seconds or NEWS_CADENCE
+        finnhub_key = os.environ.get("FINNHUB_API_KEY", "")
+        self.finnhub = FinnhubHistoricalAdapter(finnhub_key)
         self.yfinance = YFinanceHistoricalAdapter()
         self.fx = FrankfurterFxAdapter()
+        # Kept visible for compatibility, but deliberately excluded from active registries:
+        # enabling an unimplemented stub must never displace a working route.
         self.ibkr = IbkrHistoricalAdapter(os.environ.get("IBKR_ENABLED", "0") == "1")
-        self.news = MarketauxNewsAdapter(os.environ.get("MARKETAUX_API_TOKEN", ""))
+        self.marketaux = MarketauxNewsAdapter(os.environ.get("MARKETAUX_API_TOKEN", ""))
+        self.finnhub_news = FinnhubNewsAdapter(finnhub_key)
+        self.fmp = FmpFundamentalsAdapter(os.environ.get("FMP_API_KEY", ""))
+        self.yf_fundamentals = YFinanceFundamentalsAdapter()
+        self.local_technicals = LocalTechnicalsAdapter()
 
     def connect(self) -> sqlite3.Connection:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -41,525 +68,727 @@ class MarketRefreshService:
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS quotes (
-                instrument_id INTEGER PRIMARY KEY,
-                price REAL NOT NULL,
-                currency TEXT NOT NULL,
-                as_of TEXT NOT NULL,
-                source TEXT NOT NULL,
-                raw_json TEXT,
-                updated_at TEXT NOT NULL
+                instrument_id INTEGER PRIMARY KEY, price REAL NOT NULL, currency TEXT NOT NULL,
+                as_of TEXT NOT NULL, source TEXT NOT NULL, raw_json TEXT, updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS price_bars (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                instrument_id INTEGER NOT NULL,
-                bar_date TEXT NOT NULL,
-                open REAL,
-                high REAL,
-                low REAL,
-                close REAL NOT NULL,
-                volume REAL,
-                source TEXT NOT NULL,
-                UNIQUE (instrument_id, bar_date)
+                id INTEGER PRIMARY KEY AUTOINCREMENT, instrument_id INTEGER NOT NULL,
+                bar_date TEXT NOT NULL, open REAL, high REAL, low REAL, close REAL NOT NULL,
+                volume REAL, source TEXT NOT NULL, UNIQUE (instrument_id, bar_date)
             );
             CREATE TABLE IF NOT EXISTS fx_rates (
-                base_currency TEXT PRIMARY KEY,
-                quote_currency TEXT NOT NULL,
-                rate REAL NOT NULL,
-                as_of TEXT NOT NULL,
-                source TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                base_currency TEXT PRIMARY KEY, quote_currency TEXT NOT NULL, rate REAL NOT NULL,
+                as_of TEXT NOT NULL, source TEXT NOT NULL, updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS news_items (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                external_id TEXT NOT NULL UNIQUE,
-                title TEXT NOT NULL,
-                snippet TEXT,
-                url TEXT,
-                source_name TEXT,
-                published_at TEXT,
-                language TEXT,
-                raw_json TEXT,
-                fetched_at TEXT NOT NULL
+                id INTEGER PRIMARY KEY AUTOINCREMENT, external_id TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL, snippet TEXT, url TEXT, source_name TEXT, published_at TEXT,
+                language TEXT, raw_json TEXT, fetched_at TEXT NOT NULL, adapter_source TEXT
             );
             CREATE TABLE IF NOT EXISTS news_item_instruments (
-                news_item_id INTEGER NOT NULL,
-                instrument_id INTEGER NOT NULL,
+                news_item_id INTEGER NOT NULL, instrument_id INTEGER NOT NULL,
                 PRIMARY KEY (news_item_id, instrument_id),
                 FOREIGN KEY (news_item_id) REFERENCES news_items(id) ON DELETE CASCADE,
                 FOREIGN KEY (instrument_id) REFERENCES instruments(id) ON DELETE CASCADE
             );
             CREATE TABLE IF NOT EXISTS technicals (
-                instrument_id INTEGER PRIMARY KEY,
-                as_of TEXT NOT NULL,
-                features_json TEXT NOT NULL,
-                source TEXT NOT NULL,
+                instrument_id INTEGER PRIMARY KEY, as_of TEXT NOT NULL, features_json TEXT NOT NULL,
+                source TEXT NOT NULL, updated_at TEXT NOT NULL,
+                FOREIGN KEY (instrument_id) REFERENCES instruments(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS fundamentals (
+                instrument_id INTEGER PRIMARY KEY, payload_json TEXT NOT NULL, source TEXT NOT NULL,
+                as_of TEXT NOT NULL, completeness_state TEXT NOT NULL,
+                coverage_score REAL NOT NULL, missing_fields_json TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (instrument_id) REFERENCES instruments(id) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS ingestion_state (
+                instrument_id INTEGER NOT NULL, operation TEXT NOT NULL,
+                cadence_seconds INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+                last_attempt_at TEXT, last_success_at TEXT, selected_source TEXT,
+                coverage_score REAL, missing_fields_json TEXT NOT NULL DEFAULT '[]',
+                gap_streak INTEGER NOT NULL DEFAULT 0, next_due_at TEXT,
+                last_input_fingerprint TEXT, updated_at TEXT NOT NULL,
+                PRIMARY KEY (instrument_id, operation),
+                FOREIGN KEY (instrument_id) REFERENCES instruments(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_ingestion_due
+                ON ingestion_state (operation, next_due_at, last_success_at);
+            CREATE TABLE IF NOT EXISTS provider_rate_state (
+                provider TEXT PRIMARY KEY, window_started_at TEXT, window_count INTEGER NOT NULL DEFAULT 0,
+                last_call_at TEXT, cooldown_until TEXT, observed_limit INTEGER,
+                observed_remaining INTEGER, observed_reset_at TEXT, updated_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS ingest_reports (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                payload_json TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                id INTEGER PRIMARY KEY CHECK (id = 1), payload_json TEXT NOT NULL, updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS news_refresh_meta (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                last_run_at TEXT NOT NULL,
-                last_success_at TEXT,
-                report_json TEXT
+                id INTEGER PRIMARY KEY CHECK (id = 1), last_run_at TEXT NOT NULL,
+                last_success_at TEXT, report_json TEXT
             );
             CREATE TABLE IF NOT EXISTS news_symbol_aliases (
-                instrument_id INTEGER PRIMARY KEY,
-                query_symbol TEXT NOT NULL,
-                source TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
+                instrument_id INTEGER PRIMARY KEY, query_symbol TEXT NOT NULL,
+                source TEXT NOT NULL, updated_at TEXT NOT NULL,
                 FOREIGN KEY (instrument_id) REFERENCES instruments(id) ON DELETE CASCADE
             );
             """
         )
+        self._ensure_column(conn, "news_items", "adapter_source", "TEXT")
         return conn
 
-    def refresh(self, *, force_news: bool = False) -> dict:
-        now = datetime.now(timezone.utc).isoformat()
-        results: dict = {
+    @staticmethod
+    def _ensure_column(conn: sqlite3.Connection, table: str, name: str, declaration: str) -> None:
+        names = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
+        if name not in names:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
+
+    def refresh(self, *, force_news: bool = False) -> dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        now_iso = now.isoformat()
+        ingested: dict[str, set[int]] = {
+            operation: set()
+            for operation in ("quote", "bars", "fundamentals", "technicals", "news")
+        }
+        results: dict[str, Any] = {
             "ok": True,
             "stage": 4,
-            "updated_at": now,
+            "updated_at": now_iso,
             "instruments": [],
             "fx": [],
-            "news": {
-                "fetched": 0,
-                "linked": 0,
-                "skipped": False,
-                "reason": None,
-                "per_symbol": {},
-            },
+            "news": {"fetched": 0, "linked": 0, "skipped": False, "reason": None, "per_symbol": {}},
+            "fundamentals": [],
             "technicals": [],
             "errors": [],
             "symbol_not_found": [],
             "ibkr_stub": not self.ibkr.enabled(),
-            "marketaux_enabled": self.news.enabled(),
+            "ibkr_routed": False,
+            "marketaux_enabled": self.marketaux.enabled(),
         }
-
         with self.connect() as conn:
-            # 0019: both books ingest. Quotes, bars and technicals are free at this size,
-            # so a tracked name is monitored exactly like a holding. News is the exception —
-            # see _refresh_news, which stays holdings-only to protect the Marketaux quota.
-            instruments = conn.execute(
-                """
-                SELECT i.id, i.symbol, i.currency, i.region, i.name, i.kind, i.isin,
-                       CASE WHEN h.instrument_id IS NOT NULL THEN 'portfolio' ELSE 'tracker' END AS book
-                FROM instruments i
-                LEFT JOIN holdings h ON h.instrument_id = i.id
-                LEFT JOIN tracker t ON t.instrument_id = i.id AND t.archived_at IS NULL
-                WHERE h.instrument_id IS NOT NULL OR t.instrument_id IS NOT NULL
-                ORDER BY i.symbol COLLATE NOCASE
-                """
-            ).fetchall()
-
-            currencies = {"EUR"}
+            instruments = self._instruments(conn)
+            limiter = PersistentRateLimiter(conn)
+            item_by_id: dict[int, dict[str, Any]] = {}
             for inst in instruments:
-                currencies.add((inst["currency"] or "EUR").upper())
                 item = {
-                    "instrument_id": inst["id"],
-                    "symbol": inst["symbol"],
-                    "book": inst["book"],
-                    "region": None,
-                    "quote_source": None,
-                    "bars": 0,
-                    "error": None,
+                    "instrument_id": int(inst["id"]), "symbol": inst["symbol"], "book": inst["book"],
+                    "region": resolve_region(inst["symbol"], inst["region"]),
+                    "quote_source": None, "bars": 0, "error": None,
                 }
-                region = resolve_region(inst["symbol"], inst["region"])
-                item["region"] = region
-                try:
-                    adapter = self._adapter_for(region)
-                    quote = adapter.get_quote(inst["symbol"], inst["currency"] or "EUR")
-                    conn.execute(
-                        """
-                        INSERT INTO quotes (instrument_id, price, currency, as_of, source, raw_json, updated_at)
-                        VALUES (?, ?, ?, ?, ?, NULL, ?)
-                        ON CONFLICT(instrument_id) DO UPDATE SET
-                            price=excluded.price,
-                            currency=excluded.currency,
-                            as_of=excluded.as_of,
-                            source=excluded.source,
-                            updated_at=excluded.updated_at
-                        """,
-                        (
-                            inst["id"],
-                            quote.price,
-                            quote.currency,
-                            quote.as_of,
-                            quote.source,
-                            now,
-                        ),
-                    )
-                    item["quote_source"] = quote.source
-                    item["price"] = quote.price
-
-                    try:
-                        # 210 calendar days clears the 126-trading-day lookback return_6m_pct
-                        # needs (0020), with enough margin for weekends/holidays.
-                        bars = adapter.get_bars(inst["symbol"], days=210)
-                        bars_source = adapter.name
-                    except Exception as bar_exc:  # noqa: BLE001
-                        # Finnhub free tier blocks candles — fall back to yfinance for OHLCV.
-                        if adapter is self.finnhub:
-                            try:
-                                bars = self.yfinance.get_bars(inst["symbol"], days=210)
-                                bars_source = self.yfinance.name
-                                item["bars_fallback"] = f"yfinance after {bar_exc}"
-                            except Exception as yf_exc:  # noqa: BLE001
-                                item["bars"] = 0
-                                item["bars_error"] = f"{bar_exc}; yfinance: {yf_exc}"
-                                results["errors"].append(
-                                    f"{inst['symbol']} bars: {bar_exc}; yfinance: {yf_exc}"
-                                )
-                                bars = None
-                        else:
-                            item["bars"] = 0
-                            item["bars_error"] = str(bar_exc)
-                            results["errors"].append(f"{inst['symbol']} bars: {bar_exc}")
-                            bars = None
-
-                    if bars is not None:
-                        for bar in bars:
-                            if bar.close is None or bar.close != bar.close:  # NaN
-                                continue
-                            conn.execute(
-                                """
-                                INSERT INTO price_bars
-                                    (instrument_id, bar_date, open, high, low, close, volume, source)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                                ON CONFLICT(instrument_id, bar_date) DO UPDATE SET
-                                    open=excluded.open,
-                                    high=excluded.high,
-                                    low=excluded.low,
-                                    close=excluded.close,
-                                    volume=excluded.volume,
-                                    source=excluded.source
-                                """,
-                                (
-                                    inst["id"],
-                                    bar.bar_date,
-                                    bar.open,
-                                    bar.high,
-                                    bar.low,
-                                    bar.close,
-                                    bar.volume,
-                                    bar.source or bars_source,
-                                ),
-                            )
-                        item["bars"] = len(bars)
-                        item["bars_source"] = bars_source
-                except SymbolNotFoundError as exc:
-                    item["error"] = str(exc)
-                    item["error_kind"] = "symbol_not_found"
-                    results["symbol_not_found"].append(
-                        {
-                            "instrument_id": inst["id"],
-                            "symbol": inst["symbol"],
-                            "book": inst["book"],
-                            "vendor": exc.vendor,
-                            "detail": exc.detail,
-                        }
-                    )
-                    results["errors"].append(f"{inst['symbol']}: symbol not found ({exc.vendor})")
-                except Exception as exc:  # noqa: BLE001 — keep other instruments refreshing
-                    item["error"] = str(exc)
-                    item["error_kind"] = "error"
-                    results["errors"].append(f"{inst['symbol']}: {exc}")
                 results["instruments"].append(item)
+                item_by_id[int(inst["id"])] = item
 
-            for cur in sorted(currencies):
-                try:
-                    rate, as_of = self.fx.rate_to_eur(cur)
-                    conn.execute(
-                        """
-                        INSERT INTO fx_rates (base_currency, quote_currency, rate, as_of, source, updated_at)
-                        VALUES (?, 'EUR', ?, ?, ?, ?)
-                        ON CONFLICT(base_currency) DO UPDATE SET
-                            quote_currency=excluded.quote_currency,
-                            rate=excluded.rate,
-                            as_of=excluded.as_of,
-                            source=excluded.source,
-                            updated_at=excluded.updated_at
-                        """,
-                        (cur, rate, as_of, self.fx.name, now),
+            # Every invocation is a quote tick. Other datasets obey their own due clocks.
+            for inst in self._oldest_first(conn, instruments, "quote"):
+                if self._refresh_quote(
+                    conn, limiter, inst, item_by_id[int(inst["id"])], results, now
+                ):
+                    ingested["quote"].add(int(inst["id"]))
+
+            changed_bars: set[int] = set()
+            for inst in self._oldest_first(conn, instruments, "bars"):
+                if self._due(conn, int(inst["id"]), "bars", now):
+                    accepted, changed = self._refresh_bars(
+                        conn, limiter, inst, item_by_id[int(inst["id"])], results, now
                     )
-                    results["fx"].append({"base": cur, "rate": rate, "as_of": as_of})
-                except Exception as exc:  # noqa: BLE001
-                    results["errors"].append(f"FX {cur}: {exc}")
+                    if accepted:
+                        ingested["bars"].add(int(inst["id"]))
+                    if changed:
+                        changed_bars.add(int(inst["id"]))
 
-            # Technics from whatever bars we have (fresh or cached).
+            for inst in self._oldest_first(conn, instruments, "fundamentals"):
+                if self._due(conn, int(inst["id"]), "fundamentals", now):
+                    if self._refresh_fundamentals(conn, limiter, inst, results, now):
+                        ingested["fundamentals"].add(int(inst["id"]))
+
+            news_due = 0
+            for inst in self._oldest_first(conn, instruments, "news"):
+                if force_news or self._due(conn, int(inst["id"]), "news", now):
+                    news_due += 1
+                    if self._refresh_news(conn, limiter, inst, results, now):
+                        ingested["news"].add(int(inst["id"]))
+            if news_due == 0:
+                results["news"]["skipped"] = True
+                results["news"]["reason"] = "cached; no instrument news is due"
+
             for inst in instruments:
-                try:
-                    rows = conn.execute(
-                        """
-                        SELECT bar_date, close FROM price_bars
-                        WHERE instrument_id = ?
-                        ORDER BY bar_date ASC
-                        """,
-                        (inst["id"],),
-                    ).fetchall()
-                    bars = [BarClose(bar_date=r["bar_date"], close=float(r["close"])) for r in rows]
-                    features = compute_features(bars)
-                    conn.execute(
-                        """
-                        INSERT INTO technicals (instrument_id, as_of, features_json, source, updated_at)
-                        VALUES (?, ?, ?, 'local', ?)
-                        ON CONFLICT(instrument_id) DO UPDATE SET
-                            as_of=excluded.as_of,
-                            features_json=excluded.features_json,
-                            source=excluded.source,
-                            updated_at=excluded.updated_at
-                        """,
-                        (
-                            inst["id"],
-                            features.get("as_of_bar") or now,
-                            json.dumps(features),
-                            now,
-                        ),
-                    )
-                    results["technicals"].append(
-                        {
-                            "instrument_id": inst["id"],
-                            "symbol": inst["symbol"],
-                            "rsi_14": features.get("rsi_14"),
-                            "sma_20": features.get("sma_20"),
-                            "bar_count": features.get("bar_count"),
-                        }
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    results["errors"].append(f"{inst['symbol']} technicals: {exc}")
+                iid = int(inst["id"])
+                no_technical_state = self._state(conn, iid, "technicals") is None
+                if iid in changed_bars or no_technical_state:
+                    if self._refresh_technicals(conn, inst, results, now):
+                        ingested["technicals"].add(iid)
 
-            # News — per-symbol Marketaux calls (free tier: 3 articles/request).
-            self._refresh_news(conn, instruments, results, now, force=force_news)
-
+            self._refresh_fx(conn, instruments, results, now)
+            results["statistics"] = self._ingestion_statistics(conn, instruments, ingested)
+            self._event("ingest_statistics", statistics=results["statistics"])
             conn.execute(
                 """
-                INSERT INTO ingest_reports (id, payload_json, updated_at)
-                VALUES (1, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    payload_json=excluded.payload_json,
+                INSERT INTO ingest_reports (id, payload_json, updated_at) VALUES (1, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET payload_json=excluded.payload_json,
                     updated_at=excluded.updated_at
                 """,
-                (json.dumps(results), now),
+                (json.dumps(results), now_iso),
             )
-
             conn.commit()
-
-        results["ok"] = True
         return results
 
-    def _refresh_news(
+    def _instruments(self, conn: sqlite3.Connection) -> list[sqlite3.Row]:
+        return conn.execute(
+            """
+            SELECT i.id, i.symbol, i.currency, i.region, i.name, i.kind, i.isin,
+                   CASE WHEN h.instrument_id IS NOT NULL THEN 'portfolio' ELSE 'tracker' END AS book
+            FROM instruments i
+            LEFT JOIN holdings h ON h.instrument_id = i.id
+            LEFT JOIN tracker t ON t.instrument_id = i.id AND t.archived_at IS NULL
+            WHERE h.instrument_id IS NOT NULL OR t.instrument_id IS NOT NULL
+            ORDER BY i.symbol COLLATE NOCASE
+            """
+        ).fetchall()
+
+    def _oldest_first(
+        self, conn: sqlite3.Connection, instruments: list[sqlite3.Row], operation: str
+    ) -> list[sqlite3.Row]:
+        success = {
+            int(row["instrument_id"]): str(row["last_success_at"] or "")
+            for row in conn.execute(
+                "SELECT instrument_id, last_success_at FROM ingestion_state WHERE operation = ?",
+                (operation,),
+            )
+        }
+        return sorted(instruments, key=lambda i: (success.get(int(i["id"]), ""), str(i["symbol"]).lower()))
+
+    def _historical_registry(self, region: str) -> list[Any]:
+        return [self.finnhub, self.yfinance] if region == "us" else [self.yfinance]
+
+    def _fundamentals_registry(self, region: str) -> list[Any]:
+        return [self.fmp, self.yf_fundamentals] if region == "us" else [
+            self.yf_fundamentals, self.fmp
+        ]
+
+    def _news_registry(self, region: str) -> list[Any]:
+        return [self.marketaux, self.finnhub_news] if region == "us" else [self.marketaux]
+
+    def _technicals_registry(self) -> list[Any]:
+        # Extension point for sourced indicators; local remains first and normally complete.
+        return [self.local_technicals]
+
+    def _select(
         self,
         conn: sqlite3.Connection,
-        instruments: list,
-        results: dict,
-        now: str,
+        limiter: PersistentRateLimiter,
+        adapters: list[Any],
         *,
-        force: bool = False,
-    ) -> None:
-        if not instruments:
-            results["news"]["skipped"] = True
-            results["news"]["reason"] = "no holdings"
-            return
-        if not self.news.enabled():
-            results["news"]["skipped"] = True
-            results["news"]["reason"] = "MARKETAUX_API_TOKEN not set"
-            return
+        operation: str,
+        region: str,
+        kind: str,
+        invoke: Callable[[Any], Any],
+        evaluate: Callable[[str, Any], CandidateResult],
+    ) -> Selection:
+        selection = select_first_complete(
+            adapters, operation=operation, region=region, kind=kind,
+            invoke=invoke, evaluate=evaluate,
+            before_call=limiter.before_call, after_call=limiter.after_call,
+        )
+        for attempt in selection.attempts:
+            if attempt.status == "rate-limited":
+                # Retry-After is already captured from response headers where present.
+                limiter.defer(attempt.provider, None)
+        return selection
 
-        # Free tier is 100 req/day — one book pass per day is enough; SQLite is the cache.
-        meta = conn.execute(
-            "SELECT last_run_at, last_success_at, report_json FROM news_refresh_meta WHERE id = 1"
-        ).fetchone()
-        if not force and self.news_interval_seconds > 0 and meta is not None:
-            try:
-                last = str(meta["last_run_at"])
-                last_dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
-                age = (datetime.now(timezone.utc) - last_dt).total_seconds()
-                if age < self.news_interval_seconds:
-                    cached = {}
-                    if meta["report_json"]:
-                        try:
-                            cached = json.loads(meta["report_json"])
-                        except json.JSONDecodeError:
-                            cached = {}
-                    results["news"]["skipped"] = True
-                    results["news"]["reason"] = (
-                        f"cached ({int(age)}s old; refresh every {self.news_interval_seconds}s)"
-                    )
-                    results["news"]["completed_at"] = last
-                    results["news"]["fetched"] = int(cached.get("fetched") or 0)
-                    results["news"]["linked"] = int(cached.get("linked") or 0)
-                    results["news"]["per_symbol"] = cached.get("per_symbol") or {}
-                    results["news"]["from_cache"] = True
-                    return
-            except (TypeError, ValueError):
-                pass
-
-        fetched = 0
-        linked = 0
-        per_symbol: dict[str, dict] = {}
-        any_ok = False
-
-        for inst in instruments:
-            symbol = str(inst["symbol"])
-            instrument_id = int(inst["id"])
-            name = inst["name"]
-            kind = inst["kind"] if "kind" in inst.keys() else None
-            isin = inst["isin"] if "isin" in inst.keys() else None
-            query_sym = MarketauxNewsAdapter.query_symbol(symbol)
-            used_sym = query_sym
-            fallback = None
-            headlines: list = []
-
-            def _fetch(sym: str) -> list:
-                try:
-                    return self.news.get_headlines([sym], limit=3)
-                except Exception as exc:  # noqa: BLE001
-                    results["errors"].append(f"news {symbol} via {sym}: {exc}")
-                    return []
-
-            # Prefer cached Marketaux query symbol (e.g. VVMX.DE → REMX) to skip entity search.
-            alias_row = conn.execute(
-                "SELECT query_symbol, source FROM news_symbol_aliases WHERE instrument_id = ?",
-                (instrument_id,),
+    def _refresh_quote(
+        self, conn: sqlite3.Connection, limiter: PersistentRateLimiter, inst: sqlite3.Row,
+        item: dict[str, Any], results: dict[str, Any], now: datetime,
+    ) -> bool:
+        iid, symbol = int(inst["id"]), str(inst["symbol"])
+        region, kind = resolve_region(symbol, inst["region"]), str(inst["kind"] or "equity")
+        selection = self._select(
+            conn, limiter, self._historical_registry(region), operation="quote",
+            region=region, kind=kind,
+            invoke=lambda adapter: adapter.get_quote(symbol, inst["currency"] or "EUR"),
+            evaluate=evaluate_quote,
+        )
+        candidate = selection.selected
+        accepted = False
+        if candidate and candidate.complete:
+            existing = conn.execute(
+                "SELECT q.as_of, q.price, q.source, s.coverage_score "
+                "FROM quotes q LEFT JOIN ingestion_state s "
+                "ON s.instrument_id=q.instrument_id AND s.operation='quote' WHERE q.instrument_id=?",
+                (iid,),
             ).fetchone()
-            if alias_row is not None:
-                used_sym = str(alias_row["query_symbol"])
-                fallback = str(alias_row["source"])
-                headlines = _fetch(used_sym)
-
-            if not headlines and used_sym != query_sym:
-                # Stale alias — try the book listing once.
-                used_sym = query_sym
-                fallback = None
-                headlines = _fetch(query_sym)
-            elif not headlines and alias_row is None:
-                headlines = _fetch(query_sym)
-
-            if not headlines:
-                try:
-                    alt = self.news.resolve_alternate_symbol(query_sym, name)
-                except Exception as exc:  # noqa: BLE001
-                    results["errors"].append(f"news resolve {symbol}: {exc}")
-                    alt = None
-                if alt:
-                    used_sym = alt
-                    fallback = "listing"
-                    headlines = _fetch(alt)
-
-            if not headlines and MarketauxNewsAdapter.looks_like_etf(kind, name):
-                try:
-                    us_twin = self.news.resolve_us_etf_fallback(query_sym, name, isin)
-                except Exception as exc:  # noqa: BLE001
-                    results["errors"].append(f"news us_etf {symbol}: {exc}")
-                    us_twin = None
-                if us_twin and us_twin != used_sym:
-                    used_sym = us_twin
-                    fallback = "us_etf"
-                    headlines = _fetch(us_twin)
-
-            if headlines and used_sym != query_sym and fallback:
+            if not existing or not cache_wins(existing["coverage_score"], existing["as_of"], candidate):
+                quote = candidate.payload
                 conn.execute(
                     """
-                    INSERT INTO news_symbol_aliases (instrument_id, query_symbol, source, updated_at)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(instrument_id) DO UPDATE SET
-                        query_symbol=excluded.query_symbol,
-                        source=excluded.source,
+                    INSERT INTO quotes (instrument_id, price, currency, as_of, source, raw_json, updated_at)
+                    VALUES (?, ?, ?, ?, ?, NULL, ?)
+                    ON CONFLICT(instrument_id) DO UPDATE SET price=excluded.price,
+                        currency=excluded.currency, as_of=excluded.as_of, source=excluded.source,
                         updated_at=excluded.updated_at
                     """,
-                    (instrument_id, used_sym, fallback, now),
+                    (iid, quote.price, quote.currency, quote.as_of, candidate.provider, now.isoformat()),
                 )
+                item.update({"quote_source": candidate.provider, "price": quote.price})
+                accepted = True
+            else:
+                item.update({
+                    "quote_source": existing["source"], "price": float(existing["price"]),
+                    "from_cache": True,
+                })
+                self._event("retained_cache", symbol=symbol, operation="quote",
+                            candidate_source=candidate.provider)
+        self._record_state(conn, iid, "quote", QUOTE_CADENCE, selection, accepted, now)
+        self._report_attempts(symbol, "quote", selection, results)
+        return accepted
 
-            count = 0
-            for h in headlines:
+    def _refresh_bars(
+        self, conn: sqlite3.Connection, limiter: PersistentRateLimiter, inst: sqlite3.Row,
+        item: dict[str, Any], results: dict[str, Any], now: datetime,
+    ) -> tuple[bool, bool]:
+        iid, symbol = int(inst["id"]), str(inst["symbol"])
+        region, kind = resolve_region(symbol, inst["region"]), str(inst["kind"] or "equity")
+        selection = self._select(
+            conn, limiter, self._historical_registry(region), operation="bars",
+            region=region, kind=kind,
+            invoke=lambda adapter: adapter.get_bars(symbol, days=370),
+            evaluate=evaluate_bars,
+        )
+        candidate = selection.selected
+        accepted = False
+        changed = False
+        if candidate and candidate.payload:
+            existing_bars = conn.execute(
+                "SELECT bar_date, open, high, low, close, volume, source FROM price_bars "
+                "WHERE instrument_id=? ORDER BY bar_date", (iid,)
+            ).fetchall()
+            existing_eval = evaluate_bars(
+                str(existing_bars[-1]["source"]) if existing_bars else "cache", existing_bars
+            )
+            state = self._state(conn, iid, "bars")
+            score = state["coverage_score"] if state else existing_eval.score if existing_bars else None
+            if not existing_bars or not cache_wins(score, existing_eval.as_of, candidate):
+                fingerprint = self._bars_fingerprint(candidate.payload)
+                previous_fingerprint = state["last_input_fingerprint"] if state else None
+                conn.execute("DELETE FROM price_bars WHERE instrument_id=?", (iid,))
+                conn.executemany(
+                    """
+                    INSERT INTO price_bars
+                        (instrument_id, bar_date, open, high, low, close, volume, source)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [(
+                        iid, bar.bar_date, bar.open, bar.high, bar.low, bar.close, bar.volume,
+                        candidate.provider,
+                    ) for bar in candidate.payload],
+                )
+                item.update({"bars": len(candidate.payload), "bars_source": candidate.provider})
+                accepted = True
+                changed = fingerprint != previous_fingerprint
+                self._record_state(
+                    conn, iid, "bars", BARS_CADENCE, selection, True, now,
+                    fingerprint=fingerprint,
+                )
+            else:
+                item.update({"bars": len(existing_bars), "bars_source": existing_eval.provider})
+                self._event("retained_cache", symbol=symbol, operation="bars",
+                            candidate_source=candidate.provider)
+        if not accepted:
+            self._record_state(conn, iid, "bars", BARS_CADENCE, selection, False, now)
+        self._report_attempts(symbol, "bars", selection, results)
+        return accepted, changed
+
+    def _refresh_fundamentals(
+        self, conn: sqlite3.Connection, limiter: PersistentRateLimiter,
+        inst: sqlite3.Row, results: dict[str, Any], now: datetime,
+    ) -> bool:
+        iid, symbol = int(inst["id"]), str(inst["symbol"])
+        region, kind = resolve_region(symbol, inst["region"]), str(inst["kind"] or "equity")
+        selection = self._select(
+            conn, limiter, self._fundamentals_registry(region), operation="fundamentals",
+            region=region, kind=kind,
+            invoke=lambda adapter: adapter.get_fundamentals(symbol, kind),
+            evaluate=lambda provider, payload: evaluate_fundamentals(provider, payload, kind),
+        )
+        candidate = selection.selected
+        accepted = False
+        if candidate and candidate.payload:
+            existing = conn.execute(
+                "SELECT as_of, coverage_score FROM fundamentals WHERE instrument_id=?", (iid,)
+            ).fetchone()
+            if not existing or not cache_wins(existing["coverage_score"], existing["as_of"], candidate):
                 conn.execute(
                     """
-                    INSERT INTO news_items
-                        (external_id, title, snippet, url, source_name, published_at, language, raw_json, fetched_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(external_id) DO UPDATE SET
-                        title=excluded.title,
-                        snippet=excluded.snippet,
-                        url=excluded.url,
-                        source_name=excluded.source_name,
-                        published_at=excluded.published_at,
-                        language=excluded.language,
-                        raw_json=excluded.raw_json,
-                        fetched_at=excluded.fetched_at
+                    INSERT INTO fundamentals
+                        (instrument_id, payload_json, source, as_of, completeness_state,
+                         coverage_score, missing_fields_json, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(instrument_id) DO UPDATE SET payload_json=excluded.payload_json,
+                        source=excluded.source, as_of=excluded.as_of,
+                        completeness_state=excluded.completeness_state,
+                        coverage_score=excluded.coverage_score,
+                        missing_fields_json=excluded.missing_fields_json,
+                        updated_at=excluded.updated_at
                     """,
                     (
-                        h.external_id,
-                        h.title,
-                        h.snippet,
-                        h.url,
-                        h.source_name,
-                        h.published_at,
-                        h.language,
-                        h.raw_json,
-                        now,
+                        iid, json.dumps(candidate.payload), candidate.provider,
+                        candidate.as_of or now.isoformat(),
+                        "complete" if candidate.complete else "partial",
+                        candidate.score, json.dumps(candidate.missing_fields), now.isoformat(),
                     ),
                 )
-                row = conn.execute(
-                    "SELECT id FROM news_items WHERE external_id = ?", (h.external_id,)
-                ).fetchone()
-                if row is None:
-                    continue
-                news_id = int(row["id"])
-                fetched += 1
-                count += 1
-                any_ok = True
-                conn.execute(
-                    """
-                    INSERT OR IGNORE INTO news_item_instruments (news_item_id, instrument_id)
-                    VALUES (?, ?)
-                    """,
-                    (news_id, instrument_id),
-                )
-                linked += 1
+                accepted = True
+            else:
+                self._event("retained_cache", symbol=symbol, operation="fundamentals",
+                            candidate_source=candidate.provider)
+            results["fundamentals"].append({
+                "instrument_id": iid, "symbol": symbol, "source": candidate.provider,
+                "complete": candidate.complete, "score": candidate.score,
+                "missing_fields": candidate.missing_fields, "accepted": accepted,
+            })
+        self._record_state(
+            conn, iid, "fundamentals", FUNDAMENTALS_CADENCE, selection, accepted, now
+        )
+        self._report_attempts(symbol, "fundamentals", selection, results)
+        return accepted
 
-            per_symbol[symbol] = {
-                "ok": True,
-                "count": count,
-                "query_symbol": used_sym,
-                "resolved": used_sym != query_sym,
-                "fallback": fallback,
+    def _refresh_news(
+        self, conn: sqlite3.Connection, limiter: PersistentRateLimiter,
+        inst: sqlite3.Row, results: dict[str, Any], now: datetime,
+    ) -> bool:
+        iid, symbol = int(inst["id"]), str(inst["symbol"])
+        region, kind = resolve_region(symbol, inst["region"]), str(inst["kind"] or "equity")
+        selection = self._select(
+            conn, limiter, self._news_registry(region), operation="news",
+            region=region, kind=kind,
+            invoke=lambda adapter: adapter.get_headlines([symbol], limit=3),
+            evaluate=evaluate_news,
+        )
+        candidate = selection.selected
+        accepted = False
+        count = 0
+        if candidate and candidate.payload:
+            existing = conn.execute(
+                """
+                SELECT MAX(COALESCE(n.published_at, n.fetched_at)) AS as_of,
+                       s.coverage_score
+                FROM news_item_instruments nii
+                JOIN news_items n ON n.id=nii.news_item_id
+                LEFT JOIN ingestion_state s ON s.instrument_id=nii.instrument_id AND s.operation='news'
+                WHERE nii.instrument_id=?
+                """, (iid,)
+            ).fetchone()
+            if not existing or not existing["as_of"] or not cache_wins(
+                existing["coverage_score"], existing["as_of"], candidate
+            ):
+                # A feed snapshot is one provider response. Links from older adapters are removed
+                # so the accepted dataset is never field/item-merged across providers.
+                conn.execute("DELETE FROM news_item_instruments WHERE instrument_id=?", (iid,))
+                for headline in candidate.payload:
+                    external_id = f"{candidate.provider}:{headline.external_id}"
+                    conn.execute(
+                        """
+                        INSERT INTO news_items
+                            (external_id, title, snippet, url, source_name, published_at,
+                             language, raw_json, fetched_at, adapter_source)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(external_id) DO UPDATE SET title=excluded.title,
+                            snippet=excluded.snippet, url=excluded.url,
+                            source_name=excluded.source_name, published_at=excluded.published_at,
+                            language=excluded.language, raw_json=excluded.raw_json,
+                            fetched_at=excluded.fetched_at, adapter_source=excluded.adapter_source
+                        """,
+                        (
+                            external_id, headline.title, headline.snippet, headline.url,
+                            headline.source_name, headline.published_at, headline.language,
+                            headline.raw_json, now.isoformat(), candidate.provider,
+                        ),
+                    )
+                    news_id = int(conn.execute(
+                        "SELECT id FROM news_items WHERE external_id=?", (external_id,)
+                    ).fetchone()[0])
+                    conn.execute(
+                        "INSERT OR IGNORE INTO news_item_instruments (news_item_id, instrument_id) "
+                        "VALUES (?, ?)", (news_id, iid)
+                    )
+                    count += 1
+                accepted = True
+            else:
+                self._event("retained_cache", symbol=symbol, operation="news",
+                            candidate_source=candidate.provider)
+        results["news"]["fetched"] += count
+        results["news"]["linked"] += count
+        results["news"]["per_symbol"][symbol] = {
+            "ok": bool(candidate), "count": count,
+            "source": candidate.provider if candidate else None, "accepted": accepted,
+        }
+        self._record_state(conn, iid, "news", self.news_interval_seconds, selection, accepted, now)
+        self._report_attempts(symbol, "news", selection, results)
+        return accepted
+
+    def _refresh_technicals(
+        self, conn: sqlite3.Connection, inst: sqlite3.Row,
+        results: dict[str, Any], now: datetime,
+    ) -> bool:
+        iid, symbol = int(inst["id"]), str(inst["symbol"])
+        rows = conn.execute(
+            "SELECT bar_date, close FROM price_bars WHERE instrument_id=? ORDER BY bar_date", (iid,)
+        ).fetchall()
+        closes = [
+            BarClose(bar_date=str(row["bar_date"]), close=float(row["close"])) for row in rows
+        ]
+        selection = select_first_complete(
+            self._technicals_registry(), operation="technicals",
+            region=resolve_region(symbol, inst["region"]), kind=str(inst["kind"] or "equity"),
+            invoke=lambda adapter: adapter.get_technicals(symbol, closes),
+            evaluate=evaluate_technicals,
+        )
+        candidate = selection.selected or evaluate_technicals("local", {})
+        features = candidate.payload
+        existing = conn.execute(
+            "SELECT as_of FROM technicals WHERE instrument_id=?", (iid,)
+        ).fetchone()
+        accepted = bool(rows)
+        if accepted:
+            conn.execute(
+                """
+                INSERT INTO technicals (instrument_id, as_of, features_json, source, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(instrument_id) DO UPDATE SET as_of=excluded.as_of,
+                    features_json=excluded.features_json, source=excluded.source,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    iid, features.get("as_of_bar") or now.isoformat(), json.dumps(features),
+                    candidate.provider, now.isoformat(),
+                ),
+            )
+        self._record_state(conn, iid, "technicals", 0, selection, accepted, now)
+        results["technicals"].append({
+            "instrument_id": iid, "symbol": symbol, "rsi_14": features.get("rsi_14"),
+            "sma_20": features.get("sma_20"), "bar_count": features.get("bar_count"),
+            "complete": candidate.complete, "missing_fields": candidate.missing_fields,
+            "recomputed": True,
+        })
+        self._report_attempts(symbol, "technicals", selection, results)
+        return accepted
+
+    @staticmethod
+    def _ingestion_statistics(
+        conn: sqlite3.Connection,
+        instruments: list[sqlite3.Row],
+        ingested: dict[str, set[int]],
+    ) -> dict[str, Any]:
+        """Classify each active instrument dataset by what served this refresh."""
+        instrument_ids = {int(inst["id"]) for inst in instruments}
+        cached: dict[str, set[int]] = {
+            "quote": {int(row[0]) for row in conn.execute("SELECT instrument_id FROM quotes")},
+            "bars": {
+                int(row[0])
+                for row in conn.execute("SELECT DISTINCT instrument_id FROM price_bars")
+            },
+            "fundamentals": {
+                int(row[0]) for row in conn.execute("SELECT instrument_id FROM fundamentals")
+            },
+            "technicals": {
+                int(row[0]) for row in conn.execute("SELECT instrument_id FROM technicals")
+            },
+            "news": {
+                int(row[0])
+                for row in conn.execute(
+                    "SELECT DISTINCT instrument_id FROM news_item_instruments"
+                )
+            },
+        }
+
+        def operation_counts(operation: str) -> dict[str, int]:
+            fresh = instrument_ids & ingested[operation]
+            from_cache = (instrument_ids & cached[operation]) - fresh
+            return {
+                "ingested": len(fresh),
+                "from_cache": len(from_cache),
+                "missing": len(instrument_ids - fresh - from_cache),
             }
 
-        report = {
-            "fetched": fetched,
-            "linked": linked,
-            "per_symbol": per_symbol,
-            "completed_at": now,
+        operations = {
+            operation: operation_counts(operation)
+            for operation in ("quote", "bars", "fundamentals", "technicals", "news")
         }
-        results["news"]["fetched"] = fetched
-        results["news"]["linked"] = linked
-        results["news"]["per_symbol"] = per_symbol
-        results["news"]["completed_at"] = now
-        results["news"]["from_cache"] = False
 
-        # Stamp last_run even on partial/API failure so we don't burn the free tier.
+        def layer_counts(*operation_names: str) -> dict[str, int]:
+            return {
+                field: sum(operations[operation][field] for operation in operation_names)
+                for field in ("ingested", "from_cache", "missing")
+            }
+
+        historical: dict[str, Any] = {
+            **layer_counts("quote", "bars"),
+            "operations": {
+                "quote": operations["quote"],
+                "bars": operations["bars"],
+            },
+        }
+        return {
+            "unit": "instrument_datasets",
+            "layers": {
+                "historical": historical,
+                "fundamentals": layer_counts("fundamentals"),
+                "technicals": layer_counts("technicals"),
+                "news": layer_counts("news"),
+            },
+        }
+
+    def _refresh_fx(
+        self, conn: sqlite3.Connection, instruments: list[sqlite3.Row],
+        results: dict[str, Any], now: datetime,
+    ) -> None:
+        currencies = {"EUR"} | {str(inst["currency"] or "EUR").upper() for inst in instruments}
+        for currency in sorted(currencies):
+            row = conn.execute(
+                "SELECT updated_at FROM fx_rates WHERE base_currency=?", (currency,)
+            ).fetchone()
+            if row and not self._time_due(row["updated_at"], FX_CADENCE, now):
+                continue
+            try:
+                rate, as_of = self.fx.rate_to_eur(currency)
+                conn.execute(
+                    """
+                    INSERT INTO fx_rates
+                        (base_currency, quote_currency, rate, as_of, source, updated_at)
+                    VALUES (?, 'EUR', ?, ?, ?, ?)
+                    ON CONFLICT(base_currency) DO UPDATE SET rate=excluded.rate,
+                        as_of=excluded.as_of, source=excluded.source, updated_at=excluded.updated_at
+                    """,
+                    (currency, rate, as_of, self.fx.name, now.isoformat()),
+                )
+                results["fx"].append({"base": currency, "rate": rate, "as_of": as_of})
+            except Exception as exc:
+                results["errors"].append(f"FX {currency}: {exc}")
+
+    def _due(
+        self, conn: sqlite3.Connection, instrument_id: int, operation: str, now: datetime
+    ) -> bool:
+        row = self._state(conn, instrument_id, operation)
+        if row is None or not row["next_due_at"]:
+            return True
+        try:
+            due = datetime.fromisoformat(str(row["next_due_at"]).replace("Z", "+00:00"))
+            return due <= now
+        except ValueError:
+            return True
+
+    @staticmethod
+    def _state(
+        conn: sqlite3.Connection, instrument_id: int, operation: str
+    ) -> sqlite3.Row | None:
+        return conn.execute(
+            "SELECT * FROM ingestion_state WHERE instrument_id=? AND operation=?",
+            (instrument_id, operation),
+        ).fetchone()
+
+    def _record_state(
+        self, conn: sqlite3.Connection, instrument_id: int, operation: str,
+        cadence: int, selection: Selection, accepted: bool, now: datetime,
+        *, fingerprint: str | None = None,
+    ) -> None:
+        previous = self._state(conn, instrument_id, operation)
+        selected = selection.selected
+        complete = bool(selected and selected.complete)
+        gap_streak = 0 if complete else (int(previous["gap_streak"] or 0) if previous else 0) + 1
+        next_due = now + timedelta(seconds=max(0, cadence))
         conn.execute(
             """
-            INSERT INTO news_refresh_meta (id, last_run_at, last_success_at, report_json)
-            VALUES (1, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                last_run_at=excluded.last_run_at,
-                last_success_at=COALESCE(excluded.last_success_at, news_refresh_meta.last_success_at),
-                report_json=excluded.report_json
+            INSERT INTO ingestion_state
+                (instrument_id, operation, cadence_seconds, attempts, last_attempt_at,
+                 last_success_at, selected_source, coverage_score, missing_fields_json,
+                 gap_streak, next_due_at, last_input_fingerprint, updated_at)
+            VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(instrument_id, operation) DO UPDATE SET
+                cadence_seconds=excluded.cadence_seconds,
+                attempts=ingestion_state.attempts + 1,
+                last_attempt_at=excluded.last_attempt_at,
+                last_success_at=COALESCE(excluded.last_success_at, ingestion_state.last_success_at),
+                selected_source=COALESCE(excluded.selected_source, ingestion_state.selected_source),
+                coverage_score=CASE WHEN excluded.selected_source IS NULL
+                    THEN ingestion_state.coverage_score ELSE excluded.coverage_score END,
+                missing_fields_json=CASE WHEN excluded.selected_source IS NULL
+                    THEN ingestion_state.missing_fields_json ELSE excluded.missing_fields_json END,
+                gap_streak=excluded.gap_streak, next_due_at=excluded.next_due_at,
+                last_input_fingerprint=COALESCE(
+                    excluded.last_input_fingerprint, ingestion_state.last_input_fingerprint
+                ), updated_at=excluded.updated_at
             """,
-            (now, now if any_ok else None, json.dumps(report)),
+            (
+                instrument_id, operation, cadence, now.isoformat(),
+                now.isoformat() if complete else None,
+                selected.provider if selected and accepted else None,
+                selected.score if selected and accepted else None,
+                json.dumps(selected.missing_fields if selected else ["no_result"]),
+                gap_streak, next_due.isoformat(), fingerprint, now.isoformat(),
+            ),
         )
+        if selected and not selected.complete:
+            self._event(
+                "partial_selection" if accepted else "source_gap",
+                instrument_id=instrument_id, operation=operation,
+                source=selected.provider, score=selected.score,
+                missing_fields=selected.missing_fields,
+                recurring=gap_streak >= 3, gap_streak=gap_streak,
+            )
+        elif selected is None:
+            self._event(
+                "source_gap", instrument_id=instrument_id, operation=operation,
+                missing_fields=["no_result"], recurring=gap_streak >= 3, gap_streak=gap_streak,
+            )
 
-    def _adapter_for(self, region: str):
-        if self.ibkr.enabled():
-            return self.ibkr
-        if region == "us":
-            if self.finnhub.enabled():
-                return self.finnhub
-            # Degrade to yfinance when Finnhub key missing so Stage 3 still works.
-            return self.yfinance
-        return self.yfinance
+    def _report_attempts(
+        self, symbol: str, operation: str, selection: Selection, results: dict[str, Any]
+    ) -> None:
+        if selection.selected and len(selection.attempts) > 1:
+            prior = [
+                attempt.provider for attempt in selection.attempts
+                if attempt.provider != selection.selected.provider
+                and attempt.status not in ("complete",)
+            ]
+            if prior:
+                self._event(
+                    "fallback", symbol=symbol, operation=operation,
+                    from_providers=prior, selected_source=selection.selected.provider,
+                    complete=selection.selected.complete,
+                )
+        for attempt in selection.attempts:
+            if attempt.status in ("complete",):
+                continue
+            self._event(
+                "quota_deferral" if attempt.status in ("quota-deferred", "rate-limited")
+                else "adapter_attempt",
+                symbol=symbol, operation=operation,
+                provider=attempt.provider, status=attempt.status,
+                score=attempt.score, missing_fields=attempt.missing_fields,
+                detail=attempt.detail,
+            )
+            if attempt.status == "not-found":
+                results["symbol_not_found"].append({
+                    "symbol": symbol, "vendor": attempt.provider, "detail": attempt.detail,
+                    "operation": operation,
+                })
+            if attempt.status not in ("disabled", "unsupported", "incomplete"):
+                results["errors"].append(
+                    f"{symbol} {operation} via {attempt.provider}: {attempt.detail or attempt.status}"
+                )
+
+    @staticmethod
+    def _event(event: str, **values: Any) -> None:
+        print(json.dumps({"service": "tradai-worker", "event": event, **values}), flush=True)
+
+    @staticmethod
+    def _bars_fingerprint(bars: list[Any]) -> str:
+        material = "|".join(f"{bar.bar_date}:{bar.close}" for bar in bars)
+        return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _time_due(value: str, cadence: int, now: datetime) -> bool:
+        try:
+            then = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            return (now - then).total_seconds() >= cadence
+        except ValueError:
+            return True

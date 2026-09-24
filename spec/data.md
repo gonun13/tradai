@@ -86,8 +86,30 @@ Cached so the UI can still render when APIs flake.
 | --- | --- |
 | payload / snippet | Cached headline/body as needed for agents/UI |
 | instrument links | Optional tags to Instrument(s) |
+| source_name | Article publisher |
+| adapter_source | Provider that supplied the item; distinct from publisher (`0022`) |
 
 Optional cache — not a hard dependency for every run.
+
+### Fundamentals
+
+| Field (logical) | Notes |
+| --- | --- |
+| instrument_id | One current snapshot per Instrument |
+| payload | Normalized profile and equity ratios or ETF metadata/holdings |
+| source / as_of | Single adapter provenance and source timestamp |
+| completeness_state | `complete` or `partial` |
+| coverage_score / missing_fields | Comparable outcome score and explicit contract gaps |
+| updated_at | Local acceptance time |
+
+Provider payloads are never merged field by field.
+
+### Ingestion state
+
+Per Instrument × operation (`quote`, `bars`, `fundamentals`, `technicals`, `news`):
+cadence, attempt count, last attempt/success, selected source, coverage score, missing fields,
+gap streak, next due time, and optional input fingerprint. Provider rate state separately
+persists window counters, last call, cooldown, and observed limit/remaining/reset headers.
 
 ### AgentRun
 
@@ -100,7 +122,7 @@ Optional cache — not a hard dependency for every run.
 | log ref | Raw worker log pointer or blob reference |
 | research | Claude researcher output for the run (notes / synthesis; may be JSON or text) |
 | info_needs | Structured list of ingest/feature gaps Claude recommends for better future runs |
-| context | Snapshot of the full blob actually fed to Claude/Jev for this run — both books, profiles, cash, realized gains, per-subject quote/technicals/news/thesis. See "Outbound payload contract" below |
+| context | Snapshot of the full blob actually fed to Claude/Jev for this run — both books, profiles, cash, realized gains, per-subject quote/fundamentals/technicals/news/thesis. See "Outbound payload contract" below |
 
 ### Recommendation
 
@@ -118,7 +140,7 @@ Optional cache — not a hard dependency for every run.
 | suppressed / suppressed_reason | Vestigial. `0018` removed suppression entirely; nothing writes these any more |
 | rationale | Claude research text relevant to this instrument (not a Claude-chosen action) |
 | jev_payload | Combined-lens decision + confidence (primary) |
-| jev_lenses | Supporting lens answers: `thesis`, `news`, `technicals` (and optionally echo `combined`). The `prices` lens was replaced by `thesis` — it judged on P&L alone, which `0013` rejects as a sell reason. A **tracker** row has no `news` key: no news is ingested for tracked names, so they are omitted from that lens rather than asked blind (`0019`) |
+| jev_lenses | Supporting lens answers: `thesis`, `news`, `technicals`, and optionally echoed `combined`. Both books carry all four since `0022`; `prices` remains replaced by `thesis` |
 | conversation | Per-instrument Claude↔Jev transcript for this run (turns: researcher requests + decider answers, including scenario rounds) — source for UI log icon |
 | timestamps | Created / updated |
 
@@ -148,7 +170,8 @@ AgentRun → Recommendation → Instrument
                 ↓            (Recommendation.book says which book it was decided about)
               Alert
 
-NewsItem ⋯ Instrument (optional M:N tag — holdings only; no news is fetched for the tracker)
+NewsItem ⋯ Instrument (optional M:N tag — both books)
+Fundamentals → Instrument (one current normalized snapshot)
 ```
 
 ## Outbound payload contract (agent context)
@@ -157,7 +180,7 @@ Worker → Claude / Jev (and similar) calls **should include** whatever portfoli
 
 - Tickers / ISINs, kind, venue
 - Holdings: quantities, avg cost, weights / concentration, P&L, EUR notionals / totals as needed
-- Public OHLCV summaries, technical features, news snippets
+- Public OHLCV summaries, fundamentals, technical features, news snippets
 
 Still true:
 
@@ -171,9 +194,9 @@ stable, exposed API field. Top level: `display_currency`, `portfolio_market_valu
 `profiles` (`investor` / `portfolio`, raw — null where unwritten), `mandates` (the resolved text
 per book, defaults substituted — what was actually sent), `mandate` (the composed holdings text,
 kept for the log page and back-compat), `holdings` (per-instrument quantity/cost/market
-value/P&L/weights, `quote`, `technicals`, `news`, approved `thesis`), `tracked` (per tracked
-name: `book`, `symbol`, `name`, `note`, `added_at`, `quote`, `price_eur`, `technicals`, and an
-empty `news` — deliberately no position fields, since a zero cost basis would read as a fact),
+value/P&L/weights, `quote`, `fundamentals`, `technicals`, `news`, approved `thesis`), `tracked` (per tracked
+name: `book`, `symbol`, `name`, `note`, `added_at`, `quote`, `price_eur`,
+`fundamentals`, `technicals`, and `news` — but no position fields),
 `built_at`. It is written before Claude's research pass runs and carries no Claude-authored text.
 
 `conversation` turns (`worker/advisory.py::_run_lens` / `_run_scenario_round`) have `role`

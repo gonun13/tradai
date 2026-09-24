@@ -50,8 +50,9 @@ Also out by scale: multi-user auth, SaaS tenancy, public hosting, high-availabil
 - **Instrument lookup / autofill in the acquisition form** — `0019` shipped name-or-ticker search for the
   Tracker (`GET /instruments/search`, Yahoo + Finnhub + local, merged); wiring the same thing into the holdings
   form so the operator stops typing ISIN/MIC/currency by hand is the remaining half
-- **Open-universe screening** — the agent proposing names the operator has never considered. Needs a screener and
-  a fundamentals feed that do not exist; the tracker universe stays operator-curated (`0016`, `0019`)
+- **Open-universe screening** — the agent proposing names the operator has never considered.
+  The light per-book fundamentals feed in 0022 is not a market-wide screener; the tracker
+  universe stays operator-curated (`0016`, `0019`)
 
 ## Constraints (product-level)
 
@@ -75,4 +76,5 @@ Also out by scale: multi-user auth, SaaS tenancy, public hosting, high-availabil
 See open items in `spec/`: notifications beyond in-app and day-one MIC set. Claude auth is locked in
 `0008`, the current alert policy in `0018`, and the US-close clock in `0011`.
 
-Market-data / news / FX providers are locked in `spec/decisions/0006-market-data-adapters.md`.
+Research-data routing is locked in `spec/decisions/0022-four-layer-ingestion.md`; FX remains
+the auxiliary Frankfurter service chosen in `0006`.

@@ -255,9 +255,10 @@ const noQuoteYet = computed(() => entries.value.filter((e) => e.quote === null))
     </section>
 
     <p class="module-guide">
-      Tracked names share quote, bars and technical ingestion with holdings, then join the same
-      daily Claude/Jev run under your <NuxtLink to="/setup">investor profile</NuxtLink>. News is
-      intentionally holdings-only. Recording a purchase hands the name to Portfolio.
+      Tracked names share quotes, bars, fundamentals, technicals and news with holdings, then
+      join the same daily Claude/Jev run under your
+      <NuxtLink to="/setup">investor profile</NuxtLink>. Recording a purchase hands the name
+      to Portfolio.
     </p>
 
     <p v-if="opsMessage || message" class="ok">{{ opsMessage || message }}</p>

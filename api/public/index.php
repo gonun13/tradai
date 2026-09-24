@@ -171,7 +171,7 @@ $app->get('/setup', function (Request $request, Response $response) use ($json):
         'docs' => [
             'finnhub' => 'https://finnhub.io — US quotes',
             'marketaux' => 'https://www.marketaux.com — news',
-            'fmp' => 'Optional fundamentals (not required for MVP)',
+            'fmp' => 'US fundamentals primary; EU fallback when the FMP plan covers it',
             'typesafe' => 'https://console.typesafe.ai — Jev / System One',
             'claude' => 'Host: `claude setup-token` → CLAUDE_CODE_OAUTH_TOKEN (do not set ANTHROPIC_API_KEY)',
             'env_file' => 'Copy `.env.example` → `.env` on the host; restart with `bin/up -d`',
@@ -194,6 +194,7 @@ $app->get('/context/preview', function (Request $request, Response $response) us
             'cost_eur' => $h['cost_eur'],
             'market_value_eur' => $h['market_value_eur'],
             'pnl_pct' => $h['pnl_pct'],
+            'fundamentals' => $h['fundamentals'] ?? null,
             'technicals' => $features,
             'news' => $h['news'] ?? [],
         ];

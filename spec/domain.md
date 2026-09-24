@@ -15,6 +15,7 @@ Audience: product / planning. Concepts, rules, and invariants for Tradai.
 | **Book** | Which of the two a subject belongs to: `portfolio` or `tracker`. Recorded on every Recommendation, because a name can move between them. |
 | **Quote / PriceBar** | Latest quote snapshot and OHLCV history used for monitoring and technicals. |
 | **NewsItem** | Optional cached news snippet, optionally tagged to Instrument(s). |
+| **Fundamentals** | One normalized, single-provider profile/metrics snapshot for an Instrument, with explicit completeness and provenance (`0022`). |
 | **AgentRun** | One scheduled or manual analysis job: status, timing, model/runtime refs, logs. |
 | **Recommendation** | Ticker-level advisory from an AgentRun: action, horizon, rationale, confidence, Jev payload. |
 | **Alert** | Attention signal derived from a Recommendation when policy says action is warranted. |
@@ -38,8 +39,7 @@ Audience: product / planning. Concepts, rules, and invariants for Tradai.
 - **Role of Claude Agent CLI:** **researcher** — ingests book/market context, explores scenarios, builds Jev requests, writes research, emits info-needs for ingest planning (subscription auth)
 - **Role of Jev:** **decider** — one typed choice per subject x horizon, with confidence; lenses `thesis` | `news` |
   `technicals` | `combined` (`0013` replaced `prices` with `thesis`); canonical displayed action = **combined**.
-  Tracked names get three lenses — no news is ingested for them, so they are omitted from that lens rather than
-  asked a blind question (`0019`).
+  Both books get all four lenses; `0022` restored Tracker news.
 - **Claude↔Jev dialogue:** bounded back-and-forth; per-instrument transcript shown via UI log icon
 - **Human in the loop:** Tradai never places orders; the operator executes elsewhere
 
@@ -60,7 +60,7 @@ See `decisions/0009-claude-researcher-jev-decider.md`.
 5. **Privacy / agent context:**
    - Portfolio authority remains local SQLite / LAN — no cloud DB, no public hosting of holdings.
    - **Agents receive full portfolio context** needed for good decisions: holdings (quantities, cost basis), weights / concentration, P&L, and EUR totals, plus tickers/ISINs, OHLCV, technicals, and news.
-   - This is intentional personal-use tradeoff: richer advice vs ticker-only privacy. Do not strip position data from Claude / Jev payloads by default.
+   - This is intentional personal-use tradeoff: richer advice vs ticker-only privacy. Do not strip position data, fundamentals, or Tracker news from Claude / Jev payloads by default.
 6. **“Live” monitoring** means polling delayed or near-live quotes — not exchange co-located websockets.
 7. **Agent advisory cadence:** recommendations/alerts from agents refresh **once per day after US markets close** (not continuous intraday advisory). Quote monitoring may still poll during sessions.
 8. **Alerts are in-app first** — no email/SMS/push required for MVP.

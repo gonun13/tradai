@@ -25,14 +25,13 @@ Roles are locked in `decisions/0009-claude-researcher-jev-decider.md`: **Claude 
 ### Daily post–US-close run (primary)
 
 1. Scheduler fires **once per day after US markets close** (NYSE/Nasdaq regular session; exact minutes after the bell / timezone / holiday skip open).
-2. Worker loads **both books** — holdings and tracked names (`0019`) — plus market features (OHLCV summaries,
-   technicals, news snippets). One run covers both, so "sell A to fund B" is reachable in a single pass.
+2. Worker loads **both books** — holdings and tracked names — plus market features (OHLCV
+   summaries, fundamentals, technicals, and news snippets). One run covers both.
 3. **Claude (researcher)** ingests that context, produces research notes, and builds Jev System One requests.
 4. **Jev (decider)** answers Choice questions for each subject×horizon under four lenses: `thesis`, `news`,
    `technicals`, and `combined` (separately, then together). The `prices` lens was **replaced** by `thesis`:
    it judged on quote and P&L alone, which is precisely the reasoning `0013` rejects as grounds for a sell.
-   **Tracked names get three** — no news is ingested for them, so they are omitted from the `news` lens rather
-   than asked a question with nothing behind it (`0019`). They are also offered their own choice set
+   Tracked names get the same four lenses with real Tracker news (`0022`). They are also offered their own choice set
    (`buy_now` / `wait_better_entry` / `keep_watching` / `drop_lost_interest`) and judged by the investor
    profile alone. Criteria are per question, so both books still ride **one call per lens**.
 5. Claude may run further scenario rounds with Jev, bounded by `ADVISORY_MAX_SCENARIO_ROUNDS` (default **0**, maximum **10**); each turn is recorded in the per-instrument conversation transcript.
@@ -75,6 +74,8 @@ Roles are locked in `decisions/0009-claude-researcher-jev-decider.md`: **Claude 
 - **Two books, two mandates** (`0019`) — holdings are judged by the investor + portfolio profiles together;
   tracked names by the investor profile alone. Position sizing and sell doctrine are not questions you can ask
   about something the operator doesn't own.
+- **Fundamentals placement:** Claude research plus the thesis and combined lenses receive
+  each instrument's normalized snapshot. There is no separate fundamentals lens.
 - **Jev alone decides** the displayed action; Claude does not override combined-lens choices, and nothing in
   the worker overrides Jev's choice either (`0018`).
 - **Guidance, not enforcement.** The sell-doctrine reasoning (`0013`) — thesis broken or better use, not price

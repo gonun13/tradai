@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 import requests
 
 from adapters import Bar, Quote
-from adapters.errors import SymbolNotFoundError
+from adapters.base import AdapterMetadata, RatePolicy
+from adapters.errors import AdapterRateLimitError, SymbolNotFoundError
 
 _UA = "Mozilla/5.0 (compatible; Tradai/0.1; +local)"
 
@@ -18,7 +19,21 @@ class YFinanceHistoricalAdapter:
     """
 
     name = "yfinance"
-    regions = {"eu"}
+    regions = {"eu", "us"}
+
+    def __init__(self) -> None:
+        self.last_response_headers: dict[str, str] = {}
+
+    @property
+    def metadata(self) -> AdapterMetadata:
+        return AdapterMetadata(
+            provider=self.name,
+            regions=frozenset(self.regions),
+            instrument_kinds=frozenset({"equity", "etf"}),
+            operations=frozenset({"quote", "bars"}),
+            enabled=True,
+            rate_policy=RatePolicy(minimum_interval_seconds=0.25),
+        )
 
     def get_quote(self, symbol: str, currency: str) -> Quote:
         meta = self._chart_meta(symbol, range_="5d")
@@ -89,8 +104,14 @@ class YFinanceHistoricalAdapter:
             headers={"User-Agent": _UA},
             timeout=30,
         )
+        self.last_response_headers = dict(r.headers)
         if r.status_code == 429:
-            raise RuntimeError("Too Many Requests. Rate limited. Try after a while.")
+            retry = r.headers.get("Retry-After")
+            try:
+                seconds = float(retry) if retry else None
+            except ValueError:
+                seconds = None
+            raise AdapterRateLimitError("Yahoo chart rate limited", retry_after=seconds)
         if r.status_code == 404:
             raise SymbolNotFoundError(symbol, self.name, "HTTP 404")
         r.raise_for_status()

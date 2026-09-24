@@ -13,10 +13,8 @@ import doctrine
 # rather than adding keeps the call count (and token cost) unchanged.
 LENSES = ("thesis", "news", "technicals", "combined")
 
-# 0019: a tracked name has no news ingested (the Marketaux quota is spent on the book the
-# operator actually owns), so it is left out of the news lens rather than asked a question
-# with no evidence behind it. `lensLine()` in the UI already skips a missing lens.
-TRACKER_LENSES = ("thesis", "technicals", "combined")
+# 0022: tracked names receive instrument-linked news and the same four lenses.
+TRACKER_LENSES = LENSES
 
 PORTFOLIO_CRITERIA: dict[str, str] = {
     "buy_thesis_intact_underweight": (

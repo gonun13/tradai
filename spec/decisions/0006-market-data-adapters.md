@@ -2,6 +2,9 @@
 
 Date: 2026-09-20
 
+Adapter ordering, completeness, fallback, and quota behavior are superseded by 0022.
+Frankfurter FX and the source-selection rationale remain in force.
+
 ## Change
 
 Lock how external market, news, fundamentals, and FX data are sourced: separate adapters by capability and region, mix-and-match defaults, prefer vendors that cover the most slots.

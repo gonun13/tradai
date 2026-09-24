@@ -12,8 +12,8 @@ COPY requirements.txt requirements.lock ./
 RUN pip install --no-cache-dir -r requirements.lock
 
 COPY adapters ./adapters
-COPY refresh.py main.py technicals.py advisory.py schedule.py doctrine.py ./
-COPY test_doctrine.py test_persist_e2e.py ./
+COPY refresh.py ingestion.py main.py technicals.py advisory.py schedule.py doctrine.py ./
+COPY test_doctrine.py test_ingestion.py test_persist_e2e.py ./
 
 # Claude CLI refuses --dangerously-skip-permissions as root; run it as this user.
 # Worker process stays root so shared /data SQLite stays writable with the API.
@@ -24,7 +24,7 @@ RUN useradd --create-home --uid 1000 --shell /bin/bash tradai \
 
 ENV TRADAI_DATA_DIR=/data
 ENV WORKER_HEARTBEAT_SECONDS=30
-ENV WORKER_QUOTE_INTERVAL_SECONDS=300
+ENV WORKER_QUOTE_INTERVAL_SECONDS=900
 ENV WORKER_HTTP_PORT=8090
 ENV CLAUDE_RUN_AS=tradai
 ENV HOME=/root

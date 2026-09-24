@@ -3,8 +3,14 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 import requests
+from adapters.base import AdapterMetadata, RatePolicy
+from adapters.errors import (
+    AdapterPermanentError, AdapterQuotaDeferredError, AdapterRateLimitError,
+    AdapterTransientError, AdapterUnsupportedError,
+)
 
 
 @dataclass
@@ -99,6 +105,18 @@ class MarketauxNewsAdapter:
 
     def __init__(self, api_token: str) -> None:
         self.api_token = api_token.strip()
+        self.last_response_headers: dict[str, str] = {}
+
+    @property
+    def metadata(self) -> AdapterMetadata:
+        return AdapterMetadata(
+            provider=self.name,
+            regions=frozenset(self.regions),
+            instrument_kinds=frozenset({"equity", "etf"}),
+            operations=frozenset({"news"}),
+            enabled=self.enabled(),
+            rate_policy=RatePolicy(minimum_interval_seconds=0.75, window_seconds=86400, window_limit=100),
+        )
 
     def enabled(self) -> bool:
         return bool(self.api_token)
@@ -316,18 +334,39 @@ class MarketauxNewsAdapter:
         return (len(preferred_suffixes) + 1, sym)
 
     def _fetch_symbol(self, symbol: str, limit: int) -> list[NewsHeadline]:
-        r = requests.get(
-            self.base_url,
-            params={
-                "api_token": self.api_token,
-                "symbols": symbol,
-                "filter_entities": "true",
-                "language": "en",
-                "limit": min(max(limit, 1), 3),
-            },
-            timeout=45,
-        )
-        r.raise_for_status()
+        try:
+            r = requests.get(
+                self.base_url,
+                params={
+                    "api_token": self.api_token,
+                    "symbols": symbol,
+                    "filter_entities": "true",
+                    "language": "en",
+                    "limit": min(max(limit, 1), 3),
+                    "published_after": (
+                        datetime.now(timezone.utc) - timedelta(days=14)
+                    ).strftime("%Y-%m-%dT%H:%M:%S"),
+                },
+                timeout=45,
+            )
+        except requests.RequestException as exc:
+            raise AdapterTransientError(f"Marketaux request failed for {symbol}") from exc
+        self.last_response_headers = dict(r.headers)
+        if r.status_code == 429:
+            retry = r.headers.get("Retry-After")
+            try:
+                seconds = float(retry) if retry else None
+            except ValueError:
+                seconds = None
+            raise AdapterRateLimitError("Marketaux rate limited", retry_after=seconds)
+        if r.status_code == 402:
+            raise AdapterQuotaDeferredError("Marketaux usage limit exhausted")
+        if r.status_code == 403:
+            raise AdapterUnsupportedError("Marketaux news endpoint is not included in this plan")
+        if r.status_code >= 500:
+            raise AdapterTransientError(f"Marketaux HTTP {r.status_code}")
+        if r.status_code >= 400:
+            raise AdapterPermanentError(f"Marketaux HTTP {r.status_code}")
         data = r.json()
         out: list[NewsHeadline] = []
         for article in data.get("data") or []:

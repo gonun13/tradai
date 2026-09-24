@@ -18,7 +18,7 @@ keep this?", and give a `better_use` sell (`0013`) a real named alternative to p
    currency, MIC, ISIN, plus a free-text note on why they are watching it.
 3. Adding creates (or reuses) the `instruments` row and the `tracker` row. A symbol that is
    already a holding is rejected with a 409 — the two books are mutually exclusive.
-4. The next ingest pulls quotes, bars and technicals for it alongside the holdings.
+4. The next due ingest pulls quotes, bars, fundamentals, technicals, and news alongside the holdings.
 5. The next daily run researches it: Claude writes an entry case, Jev decides per horizon.
 6. Recommendations appear in the Tracker module; a `buy` raises an alert like any other.
 
@@ -37,11 +37,10 @@ keep this?", and give a `better_use` sell (`0013`) a real named alternative to p
 - **Auto-promote.** Buying a tracked symbol archives its row (note and added date preserved);
   deleting the holding un-archives it. Archived entries leave both the Tracker view and the
   agent context.
-- **Prices yes, news no.** Quotes, bars and technicals are fetched for tracked names on every
-  ingest. News is not — the Marketaux free tier is 100 requests/day and is spent on the book
-  the operator owns.
-- **Three lenses.** Tracked names are asked `thesis`, `technicals` and `combined`. They are
-  omitted from the `news` lens rather than asked a question with no evidence behind them.
+- **The same four data layers.** Quotes, bars, fundamentals, technicals, and news cover
+  tracked names. Each follows its own cadence (`0022`).
+- **Four lenses.** Tracked names are asked `thesis`, `news`, `technicals`, and
+  `combined`.
   On the `thesis` lens the question mirrors the portfolio's: whether the case for *buying*
   holds, not whether the reason for *owning* still does.
 - **Its own horizons: `1m` / `3m` / `6m`, not the holdings' `6m` / `12m` / `24m` (`0020`).**
@@ -59,7 +58,7 @@ keep this?", and give a `better_use` sell (`0013`) a real named alternative to p
 ## Out of scope
 
 - **Open-universe screening** — the agent proposing names the operator has never considered.
-  Still deferred (`0016`); it needs a screener and a fundamentals feed that do not exist.
+  Still deferred (`0016`); the new light fundamentals snapshot is not a market-wide screener.
   The tracker universe is operator-curated by design.
 - Price alerts or target-price triggers. Entry timing is Jev's judgement from technicals and
   the investor profile, not a threshold the system watches.

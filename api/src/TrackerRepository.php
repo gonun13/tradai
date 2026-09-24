@@ -33,11 +33,17 @@ final class TrackerRepository
                     i.currency, i.kind, i.region, i.mic, i.isin, i.name AS instrument_name,
                     q.price AS quote_price, q.currency AS quote_currency, q.as_of AS quote_as_of,
                     tech.features_json,
+                    f.payload_json AS fundamentals_json, f.source AS fundamentals_source,
+                    f.as_of AS fundamentals_as_of,
+                    f.completeness_state AS fundamentals_state,
+                    f.coverage_score AS fundamentals_score,
+                    f.missing_fields_json AS fundamentals_missing,
                     fx.rate AS fx_rate
              FROM tracker t
              INNER JOIN instruments i ON i.id = t.instrument_id
              LEFT JOIN quotes q ON q.instrument_id = t.instrument_id
              LEFT JOIN technicals tech ON tech.instrument_id = t.instrument_id
+             LEFT JOIN fundamentals f ON f.instrument_id = t.instrument_id
              LEFT JOIN fx_rates fx
                ON fx.base_currency = q.currency AND fx.quote_currency = \'EUR\'';
         if (!$includeArchived) {
@@ -268,7 +274,52 @@ final class TrackerRepository
             // Tracker table renders is just the quote converted (0010: UI is always EUR).
             'price_eur' => $price !== null && $rate !== null ? round($price * $rate, 4) : null,
             'technicals' => $this->compactTechnicals($features),
+            'fundamentals' => $this->mapFundamentals($r),
+            'news' => $this->newsForInstrument((int) $r['instrument_id']),
         ];
+    }
+
+    /** @param array<string, mixed> $row */
+    private function mapFundamentals(array $row): ?array
+    {
+        if (!is_string($row['fundamentals_json']) || $row['fundamentals_json'] === '') {
+            return null;
+        }
+        $payload = json_decode($row['fundamentals_json'], true);
+        $missing = json_decode((string) ($row['fundamentals_missing'] ?? '[]'), true);
+        return [
+            'payload' => is_array($payload) ? $payload : [],
+            'source' => $row['fundamentals_source'],
+            'as_of' => $row['fundamentals_as_of'],
+            'completeness_state' => $row['fundamentals_state'],
+            'coverage_score' => (float) $row['fundamentals_score'],
+            'missing_fields' => is_array($missing) ? $missing : [],
+        ];
+    }
+
+    /** @return list<array<string, mixed>> */
+    private function newsForInstrument(int $instrumentId): array
+    {
+        $stmt = $this->db->prepare(
+            'SELECT n.id, n.title, n.snippet, n.url, n.source_name, n.adapter_source,
+                    n.published_at, n.fetched_at
+             FROM news_items n
+             INNER JOIN news_item_instruments nii ON nii.news_item_id = n.id
+             WHERE nii.instrument_id = :id
+             ORDER BY COALESCE(n.published_at, n.fetched_at) DESC
+             LIMIT 3'
+        );
+        $stmt->execute(['id' => $instrumentId]);
+        return array_map(static fn (array $row): array => [
+            'id' => (int) $row['id'],
+            'title' => $row['title'],
+            'snippet' => $row['snippet'],
+            'url' => $row['url'],
+            'source_name' => $row['source_name'],
+            'adapter_source' => $row['adapter_source'],
+            'published_at' => $row['published_at'],
+            'fetched_at' => $row['fetched_at'],
+        ], $stmt->fetchAll());
     }
 
     /**

@@ -123,7 +123,8 @@ final class Database
                 published_at TEXT,
                 language TEXT,
                 raw_json TEXT,
-                fetched_at TEXT NOT NULL
+                fetched_at TEXT NOT NULL,
+                adapter_source TEXT
             );
 
             CREATE TABLE IF NOT EXISTS news_item_instruments (
@@ -141,6 +142,52 @@ final class Database
                 source TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (instrument_id) REFERENCES instruments(id) ON DELETE CASCADE
+            );
+
+            -- 0022: one normalized, single-provider fundamentals snapshot per instrument.
+            CREATE TABLE IF NOT EXISTS fundamentals (
+                instrument_id INTEGER PRIMARY KEY,
+                payload_json TEXT NOT NULL,
+                source TEXT NOT NULL,
+                as_of TEXT NOT NULL,
+                completeness_state TEXT NOT NULL CHECK (completeness_state IN ('complete', 'partial')),
+                coverage_score REAL NOT NULL,
+                missing_fields_json TEXT NOT NULL DEFAULT '[]',
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (instrument_id) REFERENCES instruments(id) ON DELETE CASCADE
+            );
+
+            -- 0022: independent cadence and coverage state per instrument/dataset.
+            CREATE TABLE IF NOT EXISTS ingestion_state (
+                instrument_id INTEGER NOT NULL,
+                operation TEXT NOT NULL,
+                cadence_seconds INTEGER NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_attempt_at TEXT,
+                last_success_at TEXT,
+                selected_source TEXT,
+                coverage_score REAL,
+                missing_fields_json TEXT NOT NULL DEFAULT '[]',
+                gap_streak INTEGER NOT NULL DEFAULT 0,
+                next_due_at TEXT,
+                last_input_fingerprint TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (instrument_id, operation),
+                FOREIGN KEY (instrument_id) REFERENCES instruments(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_ingestion_due
+                ON ingestion_state (operation, next_due_at, last_success_at);
+
+            CREATE TABLE IF NOT EXISTS provider_rate_state (
+                provider TEXT PRIMARY KEY,
+                window_started_at TEXT,
+                window_count INTEGER NOT NULL DEFAULT 0,
+                last_call_at TEXT,
+                cooldown_until TEXT,
+                observed_limit INTEGER,
+                observed_remaining INTEGER,
+                observed_reset_at TEXT,
+                updated_at TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS ingest_reports (
@@ -255,6 +302,7 @@ final class Database
         SQL);
 
         self::ensureHoldingTotalCostColumn($pdo);
+        self::ensureColumn($pdo, 'news_items', 'adapter_source', 'TEXT');
         self::ensureAgentStage5bColumns($pdo);
         self::ensureDoctrineRecommendationSchema($pdo);
         self::ensureTrackerRecommendationSchema($pdo);

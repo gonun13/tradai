@@ -24,7 +24,7 @@ from schedule import (
 DATA_DIR = os.environ.get("TRADAI_DATA_DIR", "/data")
 DB_PATH = os.path.join(DATA_DIR, "tradai.sqlite")
 HEARTBEAT_SECONDS = int(os.environ.get("WORKER_HEARTBEAT_SECONDS", "30"))
-QUOTE_INTERVAL = int(os.environ.get("WORKER_QUOTE_INTERVAL_SECONDS", "300"))
+QUOTE_INTERVAL = int(os.environ.get("WORKER_QUOTE_INTERVAL_SECONDS", "900"))
 NEWS_INTERVAL = int(os.environ.get("WORKER_NEWS_INTERVAL_SECONDS", "86400"))
 HTTP_PORT = int(os.environ.get("WORKER_HTTP_PORT", "8090"))
 
@@ -290,6 +290,7 @@ def main() -> None:
     print(
         f"[tradai-worker] stage=7 data_dir={DATA_DIR} http=:{HTTP_PORT} "
         f"quote_interval={QUOTE_INTERVAL}s finnhub={'yes' if os.environ.get('FINNHUB_API_KEY') else 'no'} "
+        f"fmp={'yes' if os.environ.get('FMP_API_KEY') else 'no'} "
         f"marketaux={'yes' if os.environ.get('MARKETAUX_API_TOKEN') else 'no'} "
         f"claude_token={'yes' if os.environ.get('CLAUDE_CODE_OAUTH_TOKEN') else 'no'} "
         f"jev={'yes' if os.environ.get('TYPESAFE_API_KEY') else 'no'} "

@@ -53,8 +53,19 @@ export type NewsItem = {
   snippet: string | null
   url: string | null
   source_name: string | null
+  adapter_source: string | null
   published_at: string | null
   fetched_at: string
+}
+
+export type FundamentalsSnapshot = {
+  payload: Record<string, unknown>
+  source: string
+  as_of: string
+  completeness_state: 'complete' | 'partial'
+  coverage_score: number
+  missing_fields: string[]
+  updated_at?: string
 }
 
 export type Holding = {
@@ -78,6 +89,7 @@ export type Holding = {
   display_currency: 'EUR'
   quote: Quote | null
   technicals: Technicals | null
+  fundamentals: FundamentalsSnapshot | null
   news: NewsItem[]
   created_at: string
   updated_at: string
@@ -409,11 +421,13 @@ export type AgentContextHolding = {
     source: string | null
   } | null
   technicals: Record<string, unknown> | null
+  fundamentals: FundamentalsSnapshot | null
   news: Array<{
     title: string
     snippet: string | null
     url: string | null
     source: string | null
+    adapter_source: string | null
     published_at: string | null
   }>
   notes: string | null
@@ -462,6 +476,15 @@ export type AgentContextTracked = {
   quote: { price: number | null; currency: string | null; as_of: string | null } | null
   price_eur: number | null
   technicals: Technicals | null
+  fundamentals: FundamentalsSnapshot | null
+  news: Array<{
+    title: string
+    snippet: string | null
+    url: string | null
+    source: string | null
+    adapter_source: string | null
+    published_at: string | null
+  }>
 }
 
 export type ConversationTurn = {
@@ -549,6 +572,8 @@ export type TrackerEntry = {
   // No cost basis exists for an unowned name, so the EUR figure is just the converted quote.
   price_eur: number | null
   technicals: Technicals | null
+  fundamentals: FundamentalsSnapshot | null
+  news: NewsItem[]
 }
 
 export type TrackerInput = {

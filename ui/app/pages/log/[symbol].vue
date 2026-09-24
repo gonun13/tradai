@@ -184,8 +184,8 @@ watch(
       <section v-if="contextTracked && !contextHolding" class="panel">
         <h1>Ingested for {{ symbol }}</h1>
         <p class="mute">
-          Tracked, not owned — no position, and no news is fetched for the tracker, so the news
-          lens was skipped for this name.
+          Tracked, not owned — no position fields. Fundamentals, news and technical evidence
+          shown here are the snapshot used for this run.
         </p>
         <div class="ctx">
           <p class="tech">
@@ -199,6 +199,13 @@ watch(
           <p v-if="contextTracked.technicals" class="tech">
             <span v-for="(v, k) in contextTracked.technicals" :key="k">{{ k }}: {{ v }} </span>
           </p>
+          <ul v-if="contextTracked.news?.length" class="news">
+            <li v-for="(n, i) in contextTracked.news" :key="i">
+              <a v-if="n.url" :href="n.url" target="_blank" rel="noopener noreferrer">{{ n.title }}</a>
+              <span v-else>{{ n.title }}</span>
+              <span class="sub"> · {{ n.source || 'news' }} · {{ n.published_at }}</span>
+            </li>
+          </ul>
           <p v-if="contextTracked.note" class="rationale">Your note: {{ contextTracked.note }}</p>
         </div>
       </section>

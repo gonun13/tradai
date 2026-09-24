@@ -71,9 +71,13 @@ cp .env.example .env   # if needed
 ### News + technicals
 
 1. Set `MARKETAUX_API_TOKEN`
-2. **Ingest now** — technicals (RSI/SMA) on holdings; news when the token is set (news at most once per day from SQLite cache)
-3. Force news: `docker compose exec worker curl -fsS -X POST 'http://api:8080/refresh/market?force_news=1'`
-4. Optional: `docker compose exec worker curl -fsS http://api:8080/context/preview`
+2. **Ingest now** — technicals (RSI/SMA), fundamentals when a route is available, and
+   daily-cached news on holdings and tracked names
+3. The completion message reports ingested vs cached instrument datasets for Historical,
+   Fundamentals, Technicals, and News; `/ingest/report` retains the same statistics plus
+   missing counts and the Historical quote/bars breakdown
+4. Force news: `docker compose exec worker curl -fsS -X POST 'http://api:8080/refresh/market?force_news=1'`
+5. Optional: `docker compose exec worker curl -fsS http://api:8080/context/preview`
 
 ### Agent advisory (`behaviour/agent-advisory.md`, `0009`)
 
@@ -104,8 +108,8 @@ Token thrift defaults: `ADVISORY_INTERVAL_SECONDS=86400`, `ADVISORY_MAX_SCENARIO
 ### Tracker (`behaviour/tracker.md`, `0019`, `0020`)
 
 1. `/tracker` → search (e.g. "airbus") → add with a note
-2. **Ingest now** — quote / bars / technicals for the tracked name; **no** news section for it
-3. **Force run** — Tracker module recommendations, three lenses (no news), horizons **1m / 3m / 6m**
+2. **Ingest now** — quote / bars / fundamentals / technicals / news for the tracked name
+3. **Force run** — Tracker recommendations, four lenses, horizons **1m / 3m / 6m**
 4. `/tracker/log/<symbol>` — "Tracked, not owned"; investor profile as mandate context
 5. Record an acquisition → entry archives to Portfolio; delete the holding → tracker returns with note intact
 6. Adding a symbol that is already a holding → HTTP 409
@@ -116,13 +120,15 @@ Run inside Compose after `bin/up -d`:
 
 ```bash
 docker compose exec worker python test_doctrine.py
+docker compose exec worker python test_ingestion.py
 docker compose exec worker python test_persist_e2e.py
 ```
 
 | Script | Covers |
 | --- | --- |
 | `test_doctrine.py` | Choice parsing, loss-gate labels, mandate composition, tracker vs portfolio choice maps |
-| `test_persist_e2e.py` | Persisted action is exactly what Jev decided (never rewritten); tracker verbs, `book` column, three-lens rule |
+| `test_ingestion.py` | Completeness/scoring, ordered fallbacks, cache protection, persistent rate state, cadence isolation, unchanged-bar behavior |
+| `test_persist_e2e.py` | Persisted action is exactly what Jev decided (never rewritten); tracker verbs, `book` column, four-lens rule |
 
 ## Browser acceptance (Docker Playwright MCP)
 
@@ -140,7 +146,7 @@ docker compose exec worker python test_persist_e2e.py
 2. Configure keys on `/setup` (values in `.env`)
 3. Write investor + portfolio profiles; set cash if desired
 4. Add at least one holding and one tracker name
-5. **Ingest now** → EUR quotes / technicals (and holdings news if token set)
+5. **Ingest now** → EUR quotes / technicals / fundamentals and both-book news when configured
 6. **Force run** → recommendations in both modules; alerts for buy/sell; book-scoped log transcript opens
 7. Both worker test scripts pass
 8. `bin/down` / `bin/up -d` — book and run history still present

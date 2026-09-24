@@ -592,6 +592,7 @@ final class HoldingRepository
             'display_currency' => 'EUR',
             'quote' => $quote,
             'technicals' => $this->technicalsForInstrument($instrumentId),
+            'fundamentals' => $this->fundamentalsForInstrument($instrumentId),
             'news' => $this->newsForInstrument($instrumentId, 3),
             'instrument' => [
                 'id' => $instrumentId,
@@ -643,11 +644,38 @@ final class HoldingRepository
         ];
     }
 
+    /** @return array<string, mixed>|null */
+    private function fundamentalsForInstrument(int $instrumentId): ?array
+    {
+        $stmt = $this->db->prepare(
+            'SELECT payload_json, source, as_of, completeness_state, coverage_score,
+                    missing_fields_json, updated_at
+             FROM fundamentals WHERE instrument_id = :id'
+        );
+        $stmt->execute(['id' => $instrumentId]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            return null;
+        }
+        $payload = json_decode((string) $row['payload_json'], true);
+        $missing = json_decode((string) $row['missing_fields_json'], true);
+        return [
+            'payload' => is_array($payload) ? $payload : [],
+            'source' => $row['source'],
+            'as_of' => $row['as_of'],
+            'completeness_state' => $row['completeness_state'],
+            'coverage_score' => (float) $row['coverage_score'],
+            'missing_fields' => is_array($missing) ? $missing : [],
+            'updated_at' => $row['updated_at'],
+        ];
+    }
+
     /** @return list<array<string, mixed>> */
     private function newsForInstrument(int $instrumentId, int $limit = 3): array
     {
         $stmt = $this->db->prepare(
-            'SELECT n.id, n.title, n.snippet, n.url, n.source_name, n.published_at, n.fetched_at
+            'SELECT n.id, n.title, n.snippet, n.url, n.source_name, n.published_at,
+                    n.fetched_at, n.adapter_source
              FROM news_items n
              INNER JOIN news_item_instruments nii ON nii.news_item_id = n.id
              WHERE nii.instrument_id = :id
@@ -666,6 +694,7 @@ final class HoldingRepository
                 'snippet' => $row['snippet'],
                 'url' => $row['url'],
                 'source_name' => $row['source_name'],
+                'adapter_source' => $row['adapter_source'],
                 'published_at' => $row['published_at'],
                 'fetched_at' => $row['fetched_at'],
             ];

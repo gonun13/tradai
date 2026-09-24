@@ -53,10 +53,34 @@ export function useGlobalOps() {
       const techCount = Array.isArray(result.refresh?.technicals)
         ? (result.refresh.technicals as unknown[]).length
         : 0
-      const parts = [`Quotes/FX + ${techCount} technical set(s)`]
-      if (news?.skipped) {
+      const statistics = result.refresh?.statistics as
+        | {
+            layers?: Record<
+              string,
+              { ingested?: number; from_cache?: number; missing?: number }
+            >
+          }
+        | undefined
+      const layerLabels: Record<string, string> = {
+        historical: 'Historical (quotes + bars)',
+        fundamentals: 'Fundamentals',
+        technicals: 'Technicals',
+        news: 'News',
+      }
+      const layerParts = Object.entries(layerLabels).flatMap(([key, label]) => {
+        const counts = statistics?.layers?.[key]
+        if (!counts) return []
+        const missingPart = counts.missing ? ` / ${counts.missing} missing` : ''
+        return [
+          `${label}: ${counts.ingested ?? 0} ingested / ${counts.from_cache ?? 0} cached${missingPart}`,
+        ]
+      })
+      const parts = layerParts.length
+        ? layerParts
+        : [`Quotes/FX + ${techCount} technical set(s)`]
+      if (!layerParts.length && news?.skipped) {
         parts.push(`news cached (${news.reason || 'daily'})`)
-      } else if (news) {
+      } else if (!layerParts.length && news) {
         parts.push(`${news.fetched ?? 0} news item(s)`)
       }
       if (missing.length) {

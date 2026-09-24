@@ -7,8 +7,8 @@ decide is what gets written. The `reason` (parsed from Jev's composite choice) a
 action, never suppress it, and never block on a missing thesis, tracker entry, or
 confidence level. Runs against a scratch copy of the live database.
 
-Also covers the tracker (0019): a name you don't own gets its own choice set, its own
-`book` label, three lenses instead of four, and no loss gate.
+Also covers the tracker: a name you don't own gets its own choice set, its own
+book label, four lenses, and no loss gate.
 
 Run: docker compose exec worker python test_persist_e2e.py
 """
@@ -82,7 +82,7 @@ def run_case(name, *, choices, realized_gains=0.0, expect_action, expect_reason=
     target = next(s for s in subjects if s["symbol"] == symbol)
     iid = int(target["instrument_id"])
 
-    # Every lens answers for every subject it is asked about; the news lens skips the tracker.
+    # Every lens answers for every subject it is asked about.
     lens_answers = {}
     for lens in ("thesis", "news", "technicals", "combined"):
         per_lens = {}
@@ -181,7 +181,7 @@ results = [
              expect_lenses=["thesis", "news", "technicals", "combined"]),
 ]
 
-print("\nTracker (0019) — a name you don't own, its own verbs, three lenses, no loss gate\n")
+print("\nTracker — a name you don't own, its own verbs, four lenses, no loss gate\n")
 results += [
     run_case("buy_now becomes buy/entry_now and is labelled tracker",
              symbol=TRACKED_SYMBOL, book="tracker",
@@ -206,13 +206,12 @@ results += [
              choices={h: "drop_lost_interest" for h in HORIZONS_BY_BOOK["tracker"]},
              expect_action="drop", expect_reason="lost_interest"),
 
-    # No news is ingested for the tracker, so the news lens is skipped rather than asked a
-    # question it has no evidence for.
-    run_case("tracker rows carry three lenses, never a blind news answer",
+    # 0022: Tracker recommendations persist the real news lens too.
+    run_case("tracker rows carry all four evidence lenses",
              symbol=TRACKED_SYMBOL, book="tracker",
              choices={h: "keep_watching" for h in HORIZONS_BY_BOOK["tracker"]},
              expect_action="watch",
-             expect_lenses=["thesis", "technicals", "combined"]),
+             expect_lenses=["thesis", "news", "technicals", "combined"]),
 
     # A holding's verbs are meaningless here; an unmapped choice must fall back safely
     # rather than write a portfolio reason onto a tracker row.

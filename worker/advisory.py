@@ -485,11 +485,16 @@ class AdvisoryService:
                    i.id AS instrument_id, i.isin, i.symbol, i.mic, i.currency, i.name, i.kind, i.region,
                    q.price AS quote_price, q.currency AS quote_currency, q.as_of AS quote_as_of, q.source AS quote_source,
                    t.features_json, t.as_of AS tech_as_of,
+                   f.payload_json AS fundamentals_json, f.source AS fundamentals_source,
+                   f.as_of AS fundamentals_as_of, f.completeness_state AS fundamentals_state,
+                   f.coverage_score AS fundamentals_score,
+                   f.missing_fields_json AS fundamentals_missing,
                    fx.rate AS fx_to_eur
             FROM holdings h
             INNER JOIN instruments i ON i.id = h.instrument_id
             LEFT JOIN quotes q ON q.instrument_id = i.id
             LEFT JOIN technicals t ON t.instrument_id = i.id
+            LEFT JOIN fundamentals f ON f.instrument_id = i.id
             LEFT JOIN fx_rates fx ON fx.base_currency = i.currency AND fx.quote_currency = 'EUR'
             ORDER BY i.symbol COLLATE NOCASE ASC
             """
@@ -527,9 +532,11 @@ class AdvisoryService:
                 except json.JSONDecodeError:
                     features = None
 
+            fundamentals = self._fundamentals_snapshot(row)
+
             news = conn.execute(
                 """
-                SELECT n.title, n.snippet, n.url, n.source_name, n.published_at
+                SELECT n.title, n.snippet, n.url, n.source_name, n.adapter_source, n.published_at
                 FROM news_item_instruments nii
                 INNER JOIN news_items n ON n.id = nii.news_item_id
                 WHERE nii.instrument_id = ?
@@ -567,12 +574,14 @@ class AdvisoryService:
                     if quote_price is not None
                     else None,
                     "technicals": features,
+                    "fundamentals": fundamentals,
                     "news": [
                         {
                             "title": n["title"],
                             "snippet": n["snippet"],
                             "url": n["url"],
                             "source": n["source_name"],
+                            "adapter_source": n["adapter_source"],
                             "published_at": n["published_at"],
                         }
                         for n in news
@@ -662,14 +671,11 @@ class AdvisoryService:
         """
         Every instrument this run decides on, each tagged with its `book` (0019).
 
-        Holdings and tracked names go through the same pipeline — same lenses, same
-        transcript, same recommendation rows — so every call site iterates this rather than
-        `context["holdings"]`. The one asymmetry: no news is ingested for tracked names, so
-        they are left out of the news lens instead of being asked a blind question.
+        Holdings and tracked names go through the same four-lens pipeline, transcript, and
+        recommendation persistence.
         """
         subjects = list(context.get("holdings") or [])
-        if lens not in ("news",):
-            subjects.extend(context.get("tracked") or [])
+        subjects.extend(context.get("tracked") or [])
         return subjects
 
     def _approved_thesis(self, conn: sqlite3.Connection, instrument_id: int) -> dict[str, Any] | None:
@@ -709,11 +715,16 @@ class AdvisoryService:
                    q.price AS quote_price, q.currency AS quote_currency,
                    q.as_of AS quote_as_of, q.source AS quote_source,
                    tech.features_json, tech.as_of AS tech_as_of,
+                   f.payload_json AS fundamentals_json, f.source AS fundamentals_source,
+                   f.as_of AS fundamentals_as_of, f.completeness_state AS fundamentals_state,
+                   f.coverage_score AS fundamentals_score,
+                   f.missing_fields_json AS fundamentals_missing,
                    fx.rate AS fx_to_eur
             FROM tracker t
             INNER JOIN instruments i ON i.id = t.instrument_id
             LEFT JOIN quotes q ON q.instrument_id = i.id
             LEFT JOIN technicals tech ON tech.instrument_id = i.id
+            LEFT JOIN fundamentals f ON f.instrument_id = i.id
             LEFT JOIN fx_rates fx ON fx.base_currency = i.currency AND fx.quote_currency = 'EUR'
             WHERE t.archived_at IS NULL
             ORDER BY t.symbol COLLATE NOCASE ASC
@@ -734,6 +745,18 @@ class AdvisoryService:
                     features = json.loads(r["features_json"])
                 except json.JSONDecodeError:
                     features = None
+
+            news = conn.execute(
+                """
+                SELECT n.title, n.snippet, n.url, n.source_name, n.adapter_source, n.published_at
+                FROM news_item_instruments nii
+                INNER JOIN news_items n ON n.id = nii.news_item_id
+                WHERE nii.instrument_id = ?
+                ORDER BY COALESCE(n.published_at, n.fetched_at) DESC
+                LIMIT 5
+                """,
+                (int(r["instrument_id"]),),
+            ).fetchall()
 
             out.append(
                 {
@@ -756,13 +779,37 @@ class AdvisoryService:
                     } if price is not None else None,
                     "price_eur": round(price * fx, 4) if price is not None and fx is not None else None,
                     "technicals": features,
+                    "fundamentals": self._fundamentals_snapshot(r),
                     "technicals_as_of": r["tech_as_of"],
-                    # No news is ingested for the tracker; empty rather than absent so any
-                    # caller that reaches for it gets a list.
-                    "news": [],
+                    # 0022: tracked names carry a real, instrument-linked news snapshot.
+                    "news": [{
+                        "title": n["title"], "snippet": n["snippet"], "url": n["url"],
+                        "source": n["source_name"], "adapter_source": n["adapter_source"],
+                        "published_at": n["published_at"],
+                    } for n in news],
                 }
             )
         return out
+
+    def _fundamentals_snapshot(self, row: sqlite3.Row) -> dict[str, Any] | None:
+        if not row["fundamentals_json"]:
+            return None
+        try:
+            payload = json.loads(row["fundamentals_json"])
+        except json.JSONDecodeError:
+            payload = {}
+        try:
+            missing = json.loads(row["fundamentals_missing"] or "[]")
+        except json.JSONDecodeError:
+            missing = []
+        return {
+            "payload": payload if isinstance(payload, dict) else {},
+            "source": row["fundamentals_source"],
+            "as_of": row["fundamentals_as_of"],
+            "completeness_state": row["fundamentals_state"],
+            "coverage_score": row["fundamentals_score"],
+            "missing_fields": missing if isinstance(missing, list) else [],
+        }
 
     def _setting_float(self, conn: sqlite3.Connection, key: str) -> float | None:
         row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
@@ -840,12 +887,12 @@ class AdvisoryService:
                     "falsifiers": (h.get("thesis") or {}).get("falsifiers"),
                     "px": (h["quote"] or {}).get("price") if h.get("quote") else None,
                     "tech": self._compact_technicals(h.get("technicals")),
+                    "fundamentals": h.get("fundamentals"),
                     "news": [n.get("title") for n in (h.get("news") or [])[:NEWS_TITLES_MAX] if n.get("title")],
                 }
                 for h in context["holdings"]
             ],
-            # 0019: the second book. No cost basis, no P&L, no news — deliberately, so the
-            # shape itself tells Claude these are names to judge, not positions to manage.
+            # The second book has no position fields, but gets the same research datasets.
             "tracked": [
                 {
                     "symbol": t["symbol"],
@@ -857,6 +904,8 @@ class AdvisoryService:
                     "px": (t["quote"] or {}).get("price") if t.get("quote") else None,
                     "px_eur": t.get("price_eur"),
                     "tech": self._compact_technicals(t.get("technicals")),
+                    "fundamentals": t.get("fundamentals"),
+                    "news": [n.get("title") for n in (t.get("news") or [])[:NEWS_TITLES_MAX] if n.get("title")],
                 }
                 for t in (context.get("tracked") or [])
             ],
@@ -898,7 +947,7 @@ class AdvisoryService:
             "a price, a result, an event. Not \"further research\".\n"
             "3. research — ≤3 sentences covering 1m/3m/6m (0020: the tracker is judged on "
             "entry timing, not the holdings' 6m/12m/24m).\n"
-            "No news has been ingested for tracked names, so do not claim news you cannot see.\n"
+            "Use the tracked name's fundamentals, news and technical evidence where present.\n"
             "Return ONLY JSON (no fences):\n"
             '{"synthesis":"≤2 sentences",'
             '"by_symbol":{"SYM":{"research":"","thesis_status":"intact|weakening|broken",'
@@ -1206,6 +1255,7 @@ class AdvisoryService:
                 base["thesis_status"] = tinfo.get("thesis_status")
                 base["thesis_evidence"] = tinfo.get("evidence")
                 base["better_use_target"] = tinfo.get("better_use_target")
+                base["fundamentals"] = h.get("fundamentals")
             if lens == "combined":
                 base["px"] = (h["quote"] or {}).get("price") if h.get("quote") else None
                 base["avg_cost"] = h["avg_cost"]
@@ -1234,6 +1284,12 @@ class AdvisoryService:
             if lens in ("thesis", "combined"):
                 row["entry_case"] = entry.get("entry_case")
                 row["what_would_make_me_buy"] = entry.get("what_would_make_me_buy")
+                row["fundamentals"] = t.get("fundamentals")
+            if lens in ("news", "combined"):
+                row["news"] = [
+                    n.get("title") for n in (t.get("news") or [])[:NEWS_TITLES_MAX]
+                    if n.get("title")
+                ]
             if lens in ("technicals", "combined"):
                 row["tech"] = self._compact_technicals(t.get("technicals"))
             if lens == "combined":
@@ -1252,7 +1308,7 @@ class AdvisoryService:
             "holdings": holdings_out,
             # The news lens has no evidence for tracked names, so they are not asked about
             # there and are omitted from its state too.
-            "tracked": tracked_out if lens != "news" else [],
+            "tracked": tracked_out,
         }
         if scenario:
             state["scenario"] = {
@@ -1429,7 +1485,7 @@ class AdvisoryService:
             iid = int(h["instrument_id"])
             symbol = h["symbol"]
             book = h.get("book", "portfolio")
-            # A tracked name is only asked the three lenses it has evidence for.
+            # 0022: both books use the four evidence lenses.
             lenses = TRACKER_LENSES if book == "tracker" else LENSES
             rationale = research_by_symbol.get(symbol, "")
             conversation = conversations.get(iid) or []

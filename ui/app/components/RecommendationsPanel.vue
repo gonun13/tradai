@@ -51,8 +51,7 @@ function lensLine(recs: Recommendation[]) {
     return null
   }
   // Internal signal names only — the thesis reasoning behind them stays off-screen.
-  // A tracked name has no news ingested and so is never asked the news lens; the missing
-  // key simply drops out here rather than rendering as an empty signal.
+  // Both books use the same four lenses; old runs may still have a missing key.
   const display: Record<string, string> = {
     thesis: props.book === 'tracker' ? 'case' : 'fundamentals',
     news: 'news',

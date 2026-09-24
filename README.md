@@ -43,6 +43,7 @@ Copy `.env.example` to `.env`. Secrets stay on the host; the Setup page only sho
 | Variable | Used for |
 | --- | --- |
 | `FINNHUB_API_KEY` | US quotes (https://finnhub.io — free personal key) |
+| `FMP_API_KEY` | US fundamentals primary; EU fallback where the plan covers it |
 | `MARKETAUX_API_TOKEN` | News (https://www.marketaux.com — free tier OK) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude Agent CLI in Docker — on the host run `claude setup-token` |
 | `TYPESAFE_API_KEY` | Jev decisions (https://console.typesafe.ai) |
@@ -51,8 +52,7 @@ Copy `.env.example` to `.env`. Secrets stay on the host; the Setup page only sho
 | `ADVISORY_MAX_SCENARIO_ROUNDS` | Default `0` — skip extra Claude↔Jev rounds; set `3` for the full loop |
 | `ADVISORY_AFTER_US_CLOSE_MINUTES` | Default `30` → fire at 16:30 America/New_York |
 | `ADVISORY_SCHEDULE_CHECK_SECONDS` | How often the worker checks the schedule window |
-| `FMP_API_KEY` | Optional; surfaced for future fundamentals — not consumed today |
-| `IBKR_ENABLED` | Optional IBKR quotes stub (`0` by default) |
+| `IBKR_ENABLED` | Inactive compatibility flag; the stub is never routed (`0` by default) |
 
 **Do not set `ANTHROPIC_API_KEY`.** It takes precedence and switches Claude billing to pay-as-you-go.
 
@@ -63,7 +63,7 @@ EU listings generally work via yfinance without Finnhub. Rebuild after changing 
 1. Open **Setup** (`/setup`) — confirm which keys are loaded; write optional **Investor** and **Portfolio** profiles and cash / realised-gains fields.
 2. **Portfolio** (`/portfolio`) — add holdings as acquisitions (symbol, venue, quantity, unit price, commission, trade date).
 3. **Tracker** (`/tracker`) — search by name or ticker and add names you are watching (with a note).
-4. **Ingest now** — quotes, bars, technicals (and holdings news when Marketaux is set).
+4. **Ingest now** — quotes immediately; due bars, fundamentals, technicals and both-book news.
 5. **Run now** / **Force run** — recommendations in both modules; buy/sell rows raise in-app alerts (bell, top right).
 
 Portfolio horizons are **6 / 12 / 24 months**; tracker horizons are **1 / 3 / 6 months**. The daily schedule runs after US regular close plus your offset (default 16:30 ET), at most once per ET trading day.
