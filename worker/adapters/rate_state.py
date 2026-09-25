@@ -48,10 +48,17 @@ class PersistentRateLimiter:
             f"{provider.upper().replace('-', '_')}_RATE_WINDOW_SECONDS",
             meta.rate_policy.window_seconds,
         ))
+        if meta.rate_policy.minimum_window_seconds is not None:
+            window_seconds = max(window_seconds, meta.rate_policy.minimum_window_seconds)
         window_limit = _env_int(
             f"{provider.upper().replace('-', '_')}_RATE_WINDOW_LIMIT",
             meta.rate_policy.window_limit,
         )
+        if meta.rate_policy.maximum_window_limit is not None:
+            window_limit = min(
+                window_limit or meta.rate_policy.maximum_window_limit,
+                meta.rate_policy.maximum_window_limit,
+            )
         window_started = _parse_time(str(row["window_started_at"])) if row and row["window_started_at"] else None
         count = int(row["window_count"] or 0) if row else 0
         if window_started is None or (now - window_started).total_seconds() >= window_seconds:
@@ -102,13 +109,25 @@ class PersistentRateLimiter:
         self.conn.commit()
 
     def defer(self, provider: str, retry_after: float | None) -> None:
+        now = datetime.now(timezone.utc)
+        row = self.conn.execute(
+            "SELECT cooldown_until FROM provider_rate_state WHERE provider = ?",
+            (provider,),
+        ).fetchone()
+        existing = (
+            _parse_time(str(row["cooldown_until"]))
+            if row is not None and row["cooldown_until"]
+            else None
+        )
+        if existing and existing > now:
+            return
         seconds = retry_after if retry_after is not None else _env_float(
             f"{provider.upper().replace('-', '_')}_COOLDOWN_SECONDS", 60.0
         )
-        cooldown = datetime.now(timezone.utc) + timedelta(seconds=max(1.0, seconds))
+        cooldown = now + timedelta(seconds=max(1.0, seconds))
         self.conn.execute(
             "UPDATE provider_rate_state SET cooldown_until = ?, updated_at = ? WHERE provider = ?",
-            (cooldown.isoformat(), datetime.now(timezone.utc).isoformat(), provider),
+            (cooldown.isoformat(), now.isoformat(), provider),
         )
         self.conn.commit()
 

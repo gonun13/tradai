@@ -46,6 +46,8 @@ Implement and review against these docs before inventing behaviour.
 - `spec/decisions/0020-tracker-horizons-1-3-6.md` (tracker-only horizon split)
 - `spec/decisions/0021-separate-portfolio-tracker-modules.md` (separate module UX; shared operations)
 - `spec/decisions/0022-four-layer-ingestion.md` (outcome-oriented registries, cadences, fundamentals, Tracker news)
+- `spec/decisions/0023-free-fundamentals-routing.md` (free-provider fundamentals routing)
+- `spec/decisions/0024-remove-tracker-notes-and-show-daily-change.md` (Tracker note removal, daily change and compact actions)
 - `spec/source-matrix-v1.md` — active/candidate provider adoption inventory
 - `spec/tests.md` — acceptance checks and regression
 

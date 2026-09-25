@@ -2,8 +2,9 @@
 
 Date: 2026-09-20
 
-Tracker's news exclusion and three-lens rule are superseded by 0022. Its book model,
-profiles, verbs, horizons, search, and promotion behavior remain in force.
+Tracker's news exclusion and three-lens rule are superseded by 0022. Its operator-note behavior
+is superseded by 0024. Its book model, profiles, verbs, horizons, search, and promotion behavior
+remain in force.
 
 **Revises `0016`** (the watchlist becomes a monitored book, not a bare candidate list) and
 **partially reverses `0018`** (the watchlist UI comes back, and the single investor profile

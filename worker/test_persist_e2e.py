@@ -46,8 +46,8 @@ def seed_tracked(conn):
     )
     conn.execute("DELETE FROM tracker")
     conn.execute(
-        "INSERT INTO tracker (symbol, instrument_id, name, note, added_at, updated_at)"
-        " VALUES (?, ?, 'Scratch Co', 'test note', 'now', 'now')",
+        "INSERT INTO tracker (symbol, instrument_id, name, added_at, updated_at)"
+        " VALUES (?, ?, 'Scratch Co', 'now', 'now')",
         (TRACKED_SYMBOL, iid),
     )
     conn.commit()

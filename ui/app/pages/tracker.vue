@@ -75,7 +75,6 @@ async function runSearch(q: string) {
 const emptyForm = (): TrackerInput => ({
   symbol: '',
   name: '',
-  note: '',
   isin: '',
   mic: '',
   currency: '',
@@ -89,7 +88,6 @@ function pick(hit: SymbolHit) {
   Object.assign(form, {
     symbol: hit.symbol,
     name: hit.name ?? '',
-    note: '',
     isin: hit.isin ?? '',
     mic: hit.mic ?? '',
     // Neither search source returns currency; the API resolves it from the region unless
@@ -126,7 +124,6 @@ async function submit() {
     const payload: TrackerInput = {
       symbol: form.symbol.trim().toUpperCase(),
       name: form.name?.trim() || null,
-      note: form.note?.trim() || null,
       isin: form.isin?.trim() || null,
       mic: form.mic?.trim() || null,
       currency: form.currency?.trim().toUpperCase() || null,
@@ -147,30 +144,8 @@ async function submit() {
 }
 
 // --- Row actions ----------------------------------------------------------------------
-const editingId = ref<number | null>(null)
-const editNote = ref('')
-
-function startEditNote(entry: TrackerEntry) {
-  editingId.value = entry.id
-  editNote.value = entry.note ?? ''
-}
-
-async function saveNote(entry: TrackerEntry) {
-  busy.value = true
-  error.value = ''
-  try {
-    await api.updateTracker(entry.id, { note: editNote.value.trim() || null })
-    editingId.value = null
-    await refreshBook()
-  } catch (e) {
-    error.value = errText(e)
-  } finally {
-    busy.value = false
-  }
-}
-
 async function removeEntry(entry: TrackerEntry) {
-  if (!confirm(`Stop tracking ${entry.symbol}? Its note is deleted with it.`)) {
+  if (!confirm(`Stop tracking ${entry.symbol}?`)) {
     return
   }
   busy.value = true
@@ -234,6 +209,13 @@ function errText(e: unknown) {
 }
 
 const noQuoteYet = computed(() => entries.value.filter((e) => e.quote === null))
+
+function dailyChangeClass(change: number | null) {
+  if (change == null || Number.isNaN(Number(change)) || change === 0) {
+    return 'daily-change--neutral'
+  }
+  return change > 0 ? 'daily-change--up' : 'daily-change--down'
+}
 </script>
 
 <template>
@@ -348,14 +330,6 @@ const noQuoteYet = computed(() => entries.value.filter((e) => e.quote === null))
           ISIN
           <input v-model="form.isin" autocomplete="off">
         </label>
-        <label class="wide">
-          Why you are watching it
-          <textarea
-            v-model="form.note"
-            rows="2"
-            placeholder="e.g. Want the defence exposure but not at 30x. Revisit after H1."
-          ></textarea>
-        </label>
         <div class="wide actions">
           <button type="submit" :disabled="busy">Track it</button>
           <button type="button" class="ghost" @click="cancelAdd">Cancel</button>
@@ -390,13 +364,13 @@ const noQuoteYet = computed(() => entries.value.filter((e) => e.quote === null))
             <th>Name</th>
             <th>Price</th>
             <th>Price (EUR)</th>
+            <th class="daily-change-heading">Daily %</th>
             <th>1m</th>
             <th>3m</th>
             <th>6m</th>
             <th>RSI14</th>
-            <th>Note</th>
             <th>Added</th>
-            <th></th>
+            <th aria-label="Actions"></th>
           </tr>
         </thead>
         <tbody>
@@ -405,32 +379,17 @@ const noQuoteYet = computed(() => entries.value.filter((e) => e.quote === null))
             <td class="mute">{{ e.name || '—' }}</td>
             <td>{{ e.quote ? moneyOrDash(e.quote.price, e.quote.currency) : '—' }}</td>
             <td>{{ moneyOrDash(e.price_eur) }}</td>
+            <td class="daily-change" :class="dailyChangeClass(e.daily_change_pct)">
+              {{ pctOrDash(e.daily_change_pct) }}
+            </td>
             <td>{{ pctOrDash(e.technicals?.features.return_1m_pct) }}</td>
             <td>{{ pctOrDash(e.technicals?.features.return_3m_pct) }}</td>
             <td>{{ pctOrDash(e.technicals?.features.return_6m_pct) }}</td>
             <td>{{ fmtNum(e.technicals?.features.rsi_14, 1) }}</td>
-            <td>
-              <template v-if="editingId === e.id">
-                <input v-model="editNote" class="note-input" autocomplete="off">
-                <button type="button" class="ghost icon-btn" :disabled="busy" @click="saveNote(e)">
-                  Save
-                </button>
-                <button type="button" class="ghost icon-btn" @click="editingId = null">Cancel</button>
-              </template>
-              <span v-else class="mute">{{ e.note || '—' }}</span>
-            </td>
             <td class="mute">{{ (e.added_at || '').slice(0, 10) }}</td>
             <td class="row-actions">
-              <button
-                v-if="editingId !== e.id"
-                type="button"
-                class="ghost icon-btn"
-                @click="startEditNote(e)"
-              >
-                Note
-              </button>
               <NuxtLink
-                class="ghost icon-btn"
+                class="ghost bought-action"
                 title="Record an acquisition — this moves it to the Portfolio module"
                 :to="`/portfolio?buy=${encodeURIComponent(e.symbol)}`"
               >
@@ -441,12 +400,24 @@ const noQuoteYet = computed(() => entries.value.filter((e) => e.quote === null))
                 class="ghost icon-btn"
                 :disabled="advisingSingle === e.symbol || busy"
                 @click="runSingle(e)"
-                title="Run agent on this symbol only"
+                :aria-label="`Run agent for ${e.symbol}`"
+                :title="`Run agent for ${e.symbol}`"
               >
-                Run
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M8 5v14l11-7L8 5Z" />
+                </svg>
               </button>
-              <button type="button" class="ghost icon-btn" :disabled="busy" @click="removeEntry(e)">
-                Remove
+              <button
+                type="button"
+                class="danger icon-btn"
+                :disabled="busy"
+                :aria-label="`Remove ${e.symbol} from Tracker`"
+                :title="`Remove ${e.symbol} from Tracker`"
+                @click="removeEntry(e)"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm-3 6h12l-1 12H7L6 9Zm4 2v8h2v-8h-2Zm4 0v8h2v-8h-2Z" />
+                </svg>
               </button>
             </td>
           </tr>
@@ -472,15 +443,6 @@ const noQuoteYet = computed(() => entries.value.filter((e) => e.quote === null))
 </template>
 
 <style scoped>
-textarea {
-  font: inherit;
-  padding: 0.45rem 0.6rem;
-  border: 1px solid var(--line);
-  background: #fff;
-  color: var(--ink);
-  resize: vertical;
-}
-
 .hits {
   list-style: none;
   margin: 0.75rem 0 0;
@@ -495,12 +457,53 @@ textarea {
   gap: 0.15rem;
 }
 
-.note-input { width: 100%; min-width: 8rem; }
-
 .row-actions {
   display: flex;
   gap: 0.3rem;
   flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.icon-btn {
+  display: inline-flex;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0.3rem;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-btn svg {
+  width: 100%;
+  height: 100%;
+  fill: currentColor;
+}
+
+.daily-change-heading {
+  background: var(--accent-soft);
+  text-align: right;
+}
+
+.daily-change {
+  min-width: 5.5rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.daily-change--up {
+  background: #dceade;
+  color: #175b3a;
+}
+
+.daily-change--down {
+  background: #f2dddd;
+  color: #7a2323;
+}
+
+.daily-change--neutral {
+  background: #ecebe5;
+  color: var(--mute);
 }
 
 .actions {

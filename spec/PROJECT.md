@@ -76,5 +76,6 @@ Also out by scale: multi-user auth, SaaS tenancy, public hosting, high-availabil
 See open items in `spec/`: notifications beyond in-app and day-one MIC set. Claude auth is locked in
 `0008`, the current alert policy in `0018`, and the US-close clock in `0011`.
 
-Research-data routing is locked in `spec/decisions/0022-four-layer-ingestion.md`; FX remains
+Research-data routing is locked in `spec/decisions/0022-four-layer-ingestion.md` and the
+fundamentals revision in `spec/decisions/0023-free-fundamentals-routing.md`; FX remains
 the auxiliary Frankfurter service chosen in `0006`.

@@ -206,7 +206,6 @@ watch(
               <span class="sub"> · {{ n.source || 'news' }} · {{ n.published_at }}</span>
             </li>
           </ul>
-          <p v-if="contextTracked.note" class="rationale">Your note: {{ contextTracked.note }}</p>
         </div>
       </section>
 

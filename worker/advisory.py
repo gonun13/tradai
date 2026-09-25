@@ -648,9 +648,7 @@ class AdvisoryService:
             # 0013: drives the offset_same_year loss gate.
             "realized_gains_ytd_eur": realized,
             "calendar_year": datetime.now(timezone.utc).year,
-            "tracker": [
-                {"symbol": t["symbol"], "name": t["name"], "note": t["note"]} for t in tracked
-            ],
+            "tracker": [{"symbol": t["symbol"], "name": t["name"]} for t in tracked],
             "profiles": profiles,
             # The text each book was *actually* judged by, defaults already substituted.
             # The log page shows this rather than `profiles`, which is null wherever the
@@ -710,7 +708,7 @@ class AdvisoryService:
         """
         rows = conn.execute(
             """
-            SELECT t.symbol, t.name, t.note, t.instrument_id, t.added_at,
+            SELECT t.symbol, t.name, t.instrument_id, t.added_at,
                    i.currency, i.kind, i.region, i.isin, i.mic, i.name AS instrument_name,
                    q.price AS quote_price, q.currency AS quote_currency,
                    q.as_of AS quote_as_of, q.source AS quote_source,
@@ -764,7 +762,6 @@ class AdvisoryService:
                     "instrument_id": int(r["instrument_id"]),
                     "symbol": r["symbol"],
                     "name": r["name"] or r["instrument_name"],
-                    "note": r["note"],
                     "added_at": r["added_at"],
                     "isin": r["isin"],
                     "mic": r["mic"],
@@ -899,7 +896,6 @@ class AdvisoryService:
                     "name": t.get("name"),
                     "kind": t.get("kind"),
                     "region": t.get("region"),
-                    "note": t.get("note"),
                     "tracked_since": t.get("added_at"),
                     "px": (t["quote"] or {}).get("price") if t.get("quote") else None,
                     "px_eur": t.get("price_eur"),
@@ -1278,7 +1274,6 @@ class AdvisoryService:
                 "name": t.get("name"),
                 "owned": False,
                 "tracked_since": t.get("added_at"),
-                "operator_note": t.get("note"),
                 "note": _clip(research_by_symbol.get(sym, "")),
             }
             if lens in ("thesis", "combined"):

@@ -14,8 +14,9 @@ Near-live dashboard view of holdings with market context. Polling delayed or nea
 
 1. The worker considers all holdings and unarchived tracked names, ordered by oldest
    successful result for the operation.
-2. Quotes run every 15 minutes; daily bars and news daily; fundamentals every seven days.
-   Technicals run only when the accepted bars change. FX has an independent cache.
+2. Quotes run every 15 minutes; daily bars and news daily; complete fundamentals every seven
+   days, while missing or partial fundamentals retry daily. Technicals run only when the
+   accepted bars change. FX has an independent cache.
 3. Each requested dataset tries its ordered registry until one response is complete. Quote
    and bars fall back independently. A news or fundamentals snapshot always has one source.
 4. If no complete response exists, the best one-source partial is accepted only when it
@@ -41,9 +42,11 @@ Near-live dashboard view of holdings with market context. Polling delayed or nea
 - “Live” = polling; delayed data is acceptable for MVP.
 - Do not scan the whole market — only instruments relevant to the two books (dozens–low hundreds). Open-universe
   screening remains deferred (`0016`): the tracker universe is operator-curated.
-- Use ordered operation × region × kind registries per `decisions/0022-four-layer-ingestion.md`.
+- Use ordered operation × region × kind registries per `decisions/0022-four-layer-ingestion.md`,
+  with fundamentals revised by `decisions/0023-free-fundamentals-routing.md`.
 - Never merge providers within one requested dataset. Preserve a fresher or more complete cache.
-- Manual ingest refreshes quotes immediately and only runs other layers when due.
+- Manual ingest refreshes quotes immediately, retries missing or partial fundamentals, and only
+  runs the remaining layers when due. Complete fundamentals remain due-only.
   `force_news=1` bypasses freshness but not known hard quota/cooldown.
 - Structured logs classify disabled, unsupported, not-found, incomplete, quota-deferred,
   rate-limited, transient, and permanent outcomes. Three consecutive due incomplete

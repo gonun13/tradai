@@ -57,12 +57,21 @@ The Investor profile sets the Tracker buying lens and accompanies all advice; th
 profile adds sizing, trimming, selling, and tax rules for owned positions.
 
 A compact, neutral **Service status** area reports Claude research and Jev decisions as **Ready**
-or **Needs attention**, and Finnhub, Marketaux, and FMP as **Connected** or **Not connected —
+or **Needs attention**, and Finnhub, Marketaux, and Alpha Vantage as **Connected** or **Not connected —
 optional**. It may show a concise Anthropic API billing conflict warning and offers **Check again**.
 It does not expose environment variable names, vendor URLs, setup commands, or credential
 locations. Daily schedule and alert-policy details remain outside the Setup page.
 
 ## Responsive and accessible behavior
+
+The Portfolio holdings table keeps each row ledger-like and compact: Symbol omits region; Quote
+omits provider provenance; Cost, Value and P&L suppress duplicate native/EUR figures and never
+display the FX rate. **Daily %** uses a subtle green, red or neutral cell background according to
+sign, followed by a final column of small labelled edit/delete icon controls.
+
+The Tracker table uses the same **Daily %** sign treatment. Tracker has no operator-note field or
+column; its per-name Run and Remove actions are compact icons with explicit accessible labels and
+tooltips, while Bought remains a text action.
 
 - The utility bar may wrap on medium screens and stacks above the module on narrow screens.
 - Setup's Portfolio and Tracker cards sit side by side on desktop and stack in the same order on

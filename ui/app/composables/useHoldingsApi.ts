@@ -104,6 +104,7 @@ export type Holding = {
   pnl_native: number | null
   pnl_eur: number | null
   pnl_pct: number | null
+  daily_change_pct: number | null
   fx_to_eur: number | null
   display_currency: 'EUR'
   quote: Quote | null
@@ -320,7 +321,7 @@ export function useHoldingsApi() {
   const addTracker = (body: TrackerInput) =>
     $fetch<{ ok: boolean; entry: TrackerEntry }>('/api/tracker', { method: 'POST', body })
 
-  const updateTracker = (id: number, body: { name?: string | null; note?: string | null }) =>
+  const updateTracker = (id: number, body: { name?: string | null }) =>
     $fetch<{ ok: boolean; entry: TrackerEntry }>(`/api/tracker/${id}`, { method: 'PUT', body })
 
   const removeTracker = (id: number) =>
@@ -364,7 +365,7 @@ export function useHoldingsApi() {
 export type SetupKeys = {
   finnhub: boolean
   marketaux: boolean
-  fmp: boolean
+  alpha_vantage: boolean
   typesafe: boolean
   claude_oauth: boolean
   anthropic_api_key_set: boolean
@@ -481,7 +482,7 @@ export type AgentContext = {
   portfolio_total_eur: number | null
   realized_gains_ytd_eur: number
   calendar_year: number
-  tracker: Array<{ symbol: string; name: string | null; note: string | null }>
+  tracker: Array<{ symbol: string; name: string | null }>
   profiles: { investor: string | null; portfolio: string | null }
   /** Resolved mandate per book, defaults already substituted — what was really sent. */
   mandates: Record<Book, string>
@@ -497,7 +498,6 @@ export type AgentContextTracked = {
   instrument_id: number
   symbol: string
   name: string | null
-  note: string | null
   added_at: string
   kind: string | null
   region: string | null
@@ -576,7 +576,6 @@ export type TrackerEntry = {
   symbol: string
   instrument_id: number
   name: string | null
-  note: string | null
   added_at: string
   updated_at: string
   archived_at: string | null
@@ -590,6 +589,7 @@ export type TrackerEntry = {
   quote: Quote | null
   // No cost basis exists for an unowned name, so the EUR figure is just the converted quote.
   price_eur: number | null
+  daily_change_pct: number | null
   technicals: TechnicalsSnapshot | null
   fundamentals: FundamentalsSnapshot | null
   news: NewsItem[]
@@ -598,7 +598,6 @@ export type TrackerEntry = {
 export type TrackerInput = {
   symbol: string
   name?: string | null
-  note?: string | null
   isin?: string | null
   mic?: string | null
   currency?: string | null
