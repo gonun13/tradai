@@ -15,7 +15,7 @@ keep this?", and give a `better_use` sell (`0013`) a real named alternative to p
 1. Operator searches by company name or ticker (`GET /instruments/search`): local instruments
    first, then Yahoo and Finnhub merged behind them. Manual ticker entry is always available.
 2. Selecting a hit prefills an add form the operator can correct — symbol, name, kind, region,
-   currency, MIC, ISIN, plus a free-text note on why they are watching it.
+   currency, MIC, and ISIN.
 3. Adding creates (or reuses) the `instruments` row and the `tracker` row. A symbol that is
    already a holding is rejected with a 409 — the two books are mutually exclusive.
 4. The next due ingest pulls quotes, bars, fundamentals, technicals, and news alongside the holdings.
@@ -24,8 +24,8 @@ keep this?", and give a `better_use` sell (`0013`) a real named alternative to p
 
 ## Secondary flows
 
-- **Edit the note** — the only field the operator maintains after adding.
-- **Remove** — deletes the entry and its note outright.
+- **Run** — starts an advisory run for that tracked symbol from the row's labelled icon control.
+- **Remove** — deletes the entry from the Tracker through a labelled icon control.
 - **Bought it** — links to the Portfolio module's acquisition form with the symbol prefilled.
   Recording the acquisition is what archives the tracker entry.
 
@@ -34,11 +34,13 @@ keep this?", and give a `better_use` sell (`0013`) a real named alternative to p
 - **One instrument per tracked name, and it is mandatory.** Ingestion routes on
   `instruments.region`; a recommendation FKs to `instruments`. A name-only entry cannot be
   monitored or decided on.
-- **Auto-promote.** Buying a tracked symbol archives its row (note and added date preserved);
+- **Auto-promote.** Buying a tracked symbol archives its row (added date preserved);
   deleting the holding un-archives it. Archived entries leave both the Tracker view and the
   agent context.
 - **The same four data layers.** Quotes, bars, fundamentals, technicals, and news cover
   tracked names. Each follows its own cadence (`0022`).
+- **Daily percentage change.** The read model compares the latest quote with the most recent
+  stored daily close before the quote's calendar date. Missing inputs produce an unavailable value.
 - **Four lenses.** Tracked names are asked `thesis`, `news`, `technicals`, and
   `combined`.
   On the `thesis` lens the question mirrors the portfolio's: whether the case for *buying*
@@ -62,4 +64,3 @@ keep this?", and give a `better_use` sell (`0013`) a real named alternative to p
   The tracker universe is operator-curated by design.
 - Price alerts or target-price triggers. Entry timing is Jev's judgement from technicals and
   the investor profile, not a threshold the system watches.
-- Per-name ad-hoc research runs. One combined daily run covers both books.

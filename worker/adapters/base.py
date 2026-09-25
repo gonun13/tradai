@@ -20,6 +20,8 @@ class RatePolicy:
     window_seconds: int = 60
     window_limit: int | None = None
     request_cost: int = 1
+    minimum_window_seconds: int | None = None
+    maximum_window_limit: int | None = None
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,7 @@ class Attempt:
     score: float | None = None
     missing_fields: list[str] = field(default_factory=list)
     detail: str | None = None
+    retry_after: float | None = None
 
 
 @dataclass
@@ -103,7 +106,10 @@ def select_first_complete(
             partials.append(result)
         except Exception as exc:
             classified = classify_failure(exc)
-            attempts.append(Attempt(meta.provider, classified.kind, detail=str(classified)))
+            attempts.append(Attempt(
+                meta.provider, classified.kind, detail=str(classified),
+                retry_after=classified.retry_after,
+            ))
             if after_call:
                 after_call(adapter)
     best = max(partials, key=lambda r: (r.score, _timestamp_value(r.as_of)), default=None)

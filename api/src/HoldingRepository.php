@@ -588,6 +588,7 @@ final class HoldingRepository
             'pnl_pct' => ($totalCost > 0 && $pnlNative !== null)
                 ? ($pnlNative / $totalCost) * 100.0
                 : null,
+            'daily_change_pct' => $this->dailyChangePct($instrumentId, $quote),
             'fx_to_eur' => $fxToEur,
             'display_currency' => 'EUR',
             'quote' => $quote,
@@ -723,6 +724,43 @@ final class HoldingRepository
             'source' => $row['source'],
             'updated_at' => $row['updated_at'],
         ];
+    }
+
+    /** @param array<string, mixed>|null $quote */
+    private function dailyChangePct(int $instrumentId, ?array $quote): ?float
+    {
+        if ($quote === null || !isset($quote['price'], $quote['as_of'])) {
+            return null;
+        }
+
+        $quotePrice = (float) $quote['price'];
+        $quoteDate = substr((string) $quote['as_of'], 0, 10);
+        if (!is_finite($quotePrice) || preg_match('/^\d{4}-\d{2}-\d{2}$/', $quoteDate) !== 1) {
+            return null;
+        }
+
+        [$year, $month, $day] = array_map('intval', explode('-', $quoteDate));
+        if (!checkdate($month, $day, $year)) {
+            return null;
+        }
+
+        $stmt = $this->db->prepare(
+            'SELECT close FROM price_bars
+             WHERE instrument_id = :id AND bar_date < :quote_date
+             ORDER BY bar_date DESC LIMIT 1'
+        );
+        $stmt->execute(['id' => $instrumentId, 'quote_date' => $quoteDate]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            return null;
+        }
+
+        $previousClose = (float) $row['close'];
+        if (!is_finite($previousClose) || $previousClose <= 0.0) {
+            return null;
+        }
+
+        return (($quotePrice - $previousClose) / $previousClose) * 100.0;
     }
 
     private function fxRateToEur(string $currency): ?float

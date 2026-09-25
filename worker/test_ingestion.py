@@ -62,7 +62,7 @@ class FakeAdapter:
             raise value
         return value
 
-    def get_fundamentals(self, symbol, kind):
+    def get_fundamentals(self, symbol, kind, mic=None):
         self.calls["fundamentals"] += 1
         value = self._resolve(self.fundamentals, symbol)
         if isinstance(value, Exception):
@@ -133,6 +133,20 @@ class ContractTests(unittest.TestCase):
         )
         self.assertEqual("p2", partial.selected.provider)
         self.assertFalse(partial.selected.complete)
+
+        complete_payload = {
+            "name": "A", "symbol": "A", "market_cap": 1, "profit_margin": .1,
+            "revenue_growth": .1, "current_ratio": 2,
+        }
+        complete = FakeAdapter("complete", fundamentals=complete_payload)
+        unused = FakeAdapter("unused", fundamentals=complete_payload)
+        selected = select_first_complete(
+            [complete, unused], operation="fundamentals", region="us", kind="equity",
+            invoke=lambda a: a.get_fundamentals("A", "equity"),
+            evaluate=lambda p, v: evaluate_fundamentals(p, v, "equity"),
+        )
+        self.assertEqual("complete", selected.selected.provider)
+        self.assertEqual(0, unused.calls["fundamentals"])
 
     def test_disabled_region_and_kind_support_are_classified_without_calls(self):
         q = Quote(1, "USD", datetime.now(timezone.utc).isoformat(), "ok")
@@ -265,11 +279,11 @@ class PersistenceTests(unittest.TestCase):
             """
             CREATE TABLE instruments (
                 id INTEGER PRIMARY KEY, symbol TEXT, currency TEXT, region TEXT, name TEXT,
-                kind TEXT, isin TEXT
+                kind TEXT, isin TEXT, mic TEXT
             );
             CREATE TABLE holdings (instrument_id INTEGER);
             CREATE TABLE tracker (instrument_id INTEGER, archived_at TEXT);
-            INSERT INTO instruments VALUES (1, 'TEST', 'EUR', 'us', 'Test', 'equity', NULL);
+            INSERT INTO instruments VALUES (1, 'TEST', 'EUR', 'us', 'Test', 'equity', NULL, NULL);
             INSERT INTO holdings VALUES (1);
             """
         )
@@ -301,11 +315,11 @@ class PersistenceTests(unittest.TestCase):
             """
             CREATE TABLE instruments (
                 id INTEGER PRIMARY KEY, symbol TEXT, currency TEXT, region TEXT, name TEXT,
-                kind TEXT, isin TEXT
+                kind TEXT, isin TEXT, mic TEXT
             );
             CREATE TABLE holdings (instrument_id INTEGER);
             CREATE TABLE tracker (instrument_id INTEGER, archived_at TEXT);
-            INSERT INTO instruments VALUES (1, 'TEST', 'EUR', 'us', 'Test', 'equity', NULL);
+            INSERT INTO instruments VALUES (1, 'TEST', 'EUR', 'us', 'Test', 'equity', NULL, NULL);
             INSERT INTO holdings VALUES (1);
             """
         )
@@ -331,7 +345,7 @@ class PersistenceTests(unittest.TestCase):
 
         class Service(MarketRefreshService):
             def _historical_registry(self, region): return [adapter]
-            def _fundamentals_registry(self, region): return [adapter]
+            def _fundamentals_registry(self, region, kind): return [adapter]
             def _news_registry(self, region): return [adapter]
 
         service = Service(self.path)
@@ -390,21 +404,150 @@ class PersistenceTests(unittest.TestCase):
         self.assertEqual({"fake"}, sources)
         conn.close()
 
+    def test_manual_ingest_retries_only_fundamentals_gaps(self):
+        conn = sqlite3.connect(self.path)
+        conn.executescript(
+            """
+            CREATE TABLE instruments (
+                id INTEGER PRIMARY KEY, symbol TEXT, currency TEXT, region TEXT, name TEXT,
+                kind TEXT, isin TEXT, mic TEXT
+            );
+            CREATE TABLE holdings (instrument_id INTEGER);
+            CREATE TABLE tracker (instrument_id INTEGER, archived_at TEXT);
+            INSERT INTO instruments VALUES
+                (1, 'PART', 'EUR', 'us', 'Partial', 'equity', NULL, NULL),
+                (2, 'FULL', 'EUR', 'us', 'Complete', 'equity', NULL, NULL);
+            INSERT INTO holdings VALUES (1), (2);
+            """
+        )
+        conn.close()
+        now = datetime.now(timezone.utc).isoformat()
+
+        def fundamentals(symbol):
+            base = {"name": symbol, "symbol": symbol, "market_cap": 1, "as_of": now}
+            if symbol == "FULL":
+                base.update({
+                    "profit_margin": .1, "revenue_growth": .1, "current_ratio": 2,
+                })
+            return base
+
+        adapter = FakeAdapter("fund", fundamentals=fundamentals)
+
+        class Service(MarketRefreshService):
+            def _historical_registry(self, region): return [adapter]
+            def _fundamentals_registry(self, region, kind): return [adapter]
+            def _news_registry(self, region): return [adapter]
+
+        service = Service(self.path)
+        service.refresh()
+        self.assertEqual(2, adapter.calls["fundamentals"])
+
+        service.refresh(manual_gap_retry=True)
+        self.assertEqual(3, adapter.calls["fundamentals"])
+        conn = service.connect()
+        conn.execute(
+            "UPDATE ingestion_state SET last_attempt_at=?,next_due_at=? "
+            "WHERE instrument_id=1 AND operation='fundamentals'",
+            (
+                (datetime.now(timezone.utc) - timedelta(days=2)).isoformat(),
+                (datetime.now(timezone.utc) + timedelta(days=5)).isoformat(),
+            ),
+        )
+        conn.commit()
+        conn.close()
+        service.refresh()
+        self.assertEqual(4, adapter.calls["fundamentals"])
+
+        conn = service.connect()
+        rows = {
+            row["instrument_id"]: row
+            for row in conn.execute(
+                "SELECT instrument_id,cadence_seconds FROM ingestion_state "
+                "WHERE operation='fundamentals'"
+            )
+        }
+        states = {
+            row["instrument_id"]: row["completeness_state"]
+            for row in conn.execute(
+                "SELECT instrument_id,completeness_state FROM fundamentals"
+            )
+        }
+        conn.close()
+        self.assertEqual(24 * 60 * 60, rows[1]["cadence_seconds"])
+        self.assertEqual(7 * 24 * 60 * 60, rows[2]["cadence_seconds"])
+        self.assertEqual({1: "partial", 2: "complete"}, states)
+
+    def test_existing_complete_fmp_cache_survives_active_provider_partial(self):
+        conn = sqlite3.connect(self.path)
+        conn.executescript(
+            """
+            CREATE TABLE instruments (
+                id INTEGER PRIMARY KEY, symbol TEXT, currency TEXT, region TEXT, name TEXT,
+                kind TEXT, isin TEXT, mic TEXT
+            );
+            CREATE TABLE holdings (instrument_id INTEGER);
+            CREATE TABLE tracker (instrument_id INTEGER, archived_at TEXT);
+            INSERT INTO instruments VALUES
+                (1, 'LEGACY', 'EUR', 'us', 'Legacy', 'equity', NULL, NULL);
+            INSERT INTO holdings VALUES (1);
+            """
+        )
+        conn.close()
+        adapter = FakeAdapter(
+            "active",
+            fundamentals={"name": "Legacy", "symbol": "LEGACY", "market_cap": 1},
+        )
+
+        class Service(MarketRefreshService):
+            def _historical_registry(self, region): return [adapter]
+            def _fundamentals_registry(self, region, kind): return [adapter]
+            def _news_registry(self, region): return [adapter]
+
+        service = Service(self.path)
+        conn = service.connect()
+        conn.execute(
+            """
+            INSERT INTO fundamentals
+                (instrument_id,payload_json,source,as_of,completeness_state,
+                 coverage_score,missing_fields_json,updated_at)
+            VALUES (1,'{}','fmp','2026-01-01T00:00:00+00:00','complete',1.0,'[]',
+                    '2026-01-01T00:00:00+00:00')
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        service.refresh(manual_gap_retry=True)
+        service.refresh(manual_gap_retry=True)
+        self.assertEqual(1, adapter.calls["fundamentals"])
+        conn = service.connect()
+        snapshot = conn.execute(
+            "SELECT source,completeness_state FROM fundamentals WHERE instrument_id=1"
+        ).fetchone()
+        state = conn.execute(
+            "SELECT cadence_seconds FROM ingestion_state "
+            "WHERE instrument_id=1 AND operation='fundamentals'"
+        ).fetchone()
+        conn.close()
+        self.assertEqual("fmp", snapshot["source"])
+        self.assertEqual("complete", snapshot["completeness_state"])
+        self.assertEqual(7 * 24 * 60 * 60, state["cadence_seconds"])
+
     def test_mixed_book_sqlite_scenario_degrades_per_dataset(self):
         conn = sqlite3.connect(self.path)
         conn.executescript(
             """
             CREATE TABLE instruments (
                 id INTEGER PRIMARY KEY, symbol TEXT, currency TEXT, region TEXT, name TEXT,
-                kind TEXT, isin TEXT
+                kind TEXT, isin TEXT, mic TEXT
             );
             CREATE TABLE holdings (instrument_id INTEGER);
             CREATE TABLE tracker (instrument_id INTEGER, archived_at TEXT);
             INSERT INTO instruments VALUES
-                (1, 'US_EQ', 'EUR', 'us', 'US Equity', 'equity', NULL),
-                (2, 'EU_ETF.DE', 'EUR', 'eu', 'EU ETF', 'etf', NULL),
-                (3, 'US_ETF', 'EUR', 'us', 'US ETF', 'etf', NULL),
-                (4, 'EU_EQ.PA', 'EUR', 'eu', 'EU Equity', 'equity', NULL);
+                (1, 'US_EQ', 'EUR', 'us', 'US Equity', 'equity', NULL, NULL),
+                (2, 'EU_ETF.DE', 'EUR', 'eu', 'EU ETF', 'etf', NULL, 'XETR'),
+                (3, 'US_ETF', 'EUR', 'us', 'US ETF', 'etf', NULL, NULL),
+                (4, 'EU_EQ.PA', 'EUR', 'eu', 'EU Equity', 'equity', NULL, 'XPAR');
             INSERT INTO holdings VALUES (1), (2);
             INSERT INTO tracker VALUES (3, NULL), (4, NULL);
             """
@@ -481,7 +624,7 @@ class PersistenceTests(unittest.TestCase):
             def _historical_registry(self, region):
                 return [hist_primary, hist_fallback]
 
-            def _fundamentals_registry(self, region):
+            def _fundamentals_registry(self, region, kind):
                 return [fund_disabled, fund_primary, fund_second]
 
             def _news_registry(self, region):

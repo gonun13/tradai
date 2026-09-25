@@ -36,13 +36,16 @@ _symbol_search = SymbolSearchAdapter()
 _advisory_thread: threading.Thread | None = None
 
 
-def run_refresh(*, force_news: bool = False) -> dict:
+def run_refresh(*, force_news: bool = False, manual_gap_retry: bool = False) -> dict:
     with _refresh_lock:
         print(
-            f"[tradai-worker] market refresh starting force_news={force_news}",
+            f"[tradai-worker] market refresh starting force_news={force_news} "
+            f"manual_gap_retry={manual_gap_retry}",
             flush=True,
         )
-        result = _service.refresh(force_news=force_news)
+        result = _service.refresh(
+            force_news=force_news, manual_gap_retry=manual_gap_retry
+        )
         print(
             f"[tradai-worker] market refresh done instruments={len(result.get('instruments', []))} "
             f"errors={len(result.get('errors', []))}",
@@ -202,7 +205,14 @@ class Handler(BaseHTTPRequestHandler):
                     "true",
                     "yes",
                 }
-                result = run_refresh(force_news=force_news)
+                manual_gap_retry = (qs.get("manual_gap_retry") or ["0"])[0].lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                }
+                result = run_refresh(
+                    force_news=force_news, manual_gap_retry=manual_gap_retry
+                )
                 self._json(200, result)
             except Exception as exc:  # noqa: BLE001
                 self._json(500, {"ok": False, "error": str(exc)})
@@ -290,7 +300,7 @@ def main() -> None:
     print(
         f"[tradai-worker] stage=7 data_dir={DATA_DIR} http=:{HTTP_PORT} "
         f"quote_interval={QUOTE_INTERVAL}s finnhub={'yes' if os.environ.get('FINNHUB_API_KEY') else 'no'} "
-        f"fmp={'yes' if os.environ.get('FMP_API_KEY') else 'no'} "
+        f"alpha_vantage={'yes' if os.environ.get('ALPHA_VANTAGE_API_KEY') else 'no'} "
         f"marketaux={'yes' if os.environ.get('MARKETAUX_API_TOKEN') else 'no'} "
         f"claude_token={'yes' if os.environ.get('CLAUDE_CODE_OAUTH_TOKEN') else 'no'} "
         f"jev={'yes' if os.environ.get('TYPESAFE_API_KEY') else 'no'} "

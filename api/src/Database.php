@@ -264,11 +264,12 @@ final class Database
                 symbol TEXT NOT NULL UNIQUE,
                 instrument_id INTEGER NOT NULL,
                 name TEXT,
+                -- Legacy compatibility only since 0024; no active API or advisory contract.
                 note TEXT,
                 added_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 -- Set when the operator buys the name (auto-promote). Archived entries keep
-                -- their note and history but leave the Tracker view and the agent context.
+                -- their history but leave the Tracker view and the agent context.
                 archived_at TEXT,
                 FOREIGN KEY (instrument_id) REFERENCES instruments(id) ON DELETE CASCADE
             );

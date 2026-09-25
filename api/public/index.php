@@ -155,7 +155,7 @@ $app->get('/setup', function (Request $request, Response $response) use ($json):
         'keys' => [
             'finnhub' => $present('FINNHUB_API_KEY'),
             'marketaux' => $present('MARKETAUX_API_TOKEN'),
-            'fmp' => $present('FMP_API_KEY'),
+            'alpha_vantage' => $present('ALPHA_VANTAGE_API_KEY'),
             'typesafe' => $present('TYPESAFE_API_KEY'),
             'claude_oauth' => $present('CLAUDE_CODE_OAUTH_TOKEN'),
             'anthropic_api_key_set' => $present('ANTHROPIC_API_KEY'),
@@ -169,9 +169,9 @@ $app->get('/setup', function (Request $request, Response $response) use ($json):
             'max_scenario_rounds' => (int) (getenv('ADVISORY_MAX_SCENARIO_ROUNDS') ?: 0),
         ],
         'docs' => [
-            'finnhub' => 'https://finnhub.io — US quotes',
+            'finnhub' => 'https://finnhub.io — US quotes and equity fundamentals',
             'marketaux' => 'https://www.marketaux.com — news',
-            'fmp' => 'US fundamentals primary; EU fallback when the FMP plan covers it',
+            'alpha_vantage' => 'https://www.alphavantage.co — EU equities and ETF fundamentals; US equity fallback',
             'typesafe' => 'https://console.typesafe.ai — Jev / System One',
             'claude' => 'Host: `claude setup-token` → CLAUDE_CODE_OAUTH_TOKEN (do not set ANTHROPIC_API_KEY)',
             'env_file' => 'Copy `.env.example` → `.env` on the host; restart with `bin/up -d`',
@@ -244,7 +244,7 @@ $app->post('/holdings', function (Request $request, Response $response) use ($js
     /** @var array<string, mixed> $body */
     $body = (array) $request->getParsedBody();
     $created = $holdings->create($body);
-    // Auto-promote (0019): a name you now own leaves the tracker, keeping its note.
+    // Auto-promote (0019, revised by 0024): a name you now own leaves the tracker.
     $tracker->archiveBySymbol((string) $created['instrument']['symbol']);
     return $json($response, ['ok' => true, 'holding' => $created], 201);
 });

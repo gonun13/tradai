@@ -152,6 +152,13 @@ function startEdit(h: Holding) {
   openEditLot(h, lots[0] ?? null)
 }
 
+function dailyChangeClass(change: number | null) {
+  if (change == null || Number.isNaN(Number(change)) || change === 0) {
+    return 'daily-change--neutral'
+  }
+  return change > 0 ? 'daily-change--up' : 'daily-change--down'
+}
+
 function openEditLot(h: Holding, tx: Transaction | null) {
   lotPickerHolding.value = null
   editingId.value = h.id
@@ -400,7 +407,8 @@ async function removeHolding(h: Holding) {
             <th>Value (EUR)</th>
             <th>P&amp;L (EUR)</th>
             <th>P&amp;L %</th>
-            <th></th>
+            <th class="daily-change-heading">Daily %</th>
+            <th aria-label="Actions"></th>
           </tr>
         </thead>
         <tbody>
@@ -409,7 +417,6 @@ async function removeHolding(h: Holding) {
               <strong>{{ h.instrument.symbol }}</strong>
               <span class="sub">
                 {{ h.instrument.name || h.instrument.isin || h.instrument.kind }}
-                · {{ h.instrument.region || '?' }}
                 · {{ h.instrument.currency }}
               </span>
             </td>
@@ -427,37 +434,62 @@ async function removeHolding(h: Holding) {
             <td>
               <template v-if="h.quote">
                 {{ money(h.quote.price, h.quote.currency) }}
-                <span class="sub">{{ h.quote.source }} · native</span>
               </template>
               <span v-else class="bad">no quote</span>
             </td>
             <td>
               {{ money(h.cost_native, h.instrument.currency) }}
-              <span class="sub">
+              <span v-if="h.instrument.currency.toUpperCase() !== 'EUR'" class="sub">
                 {{ h.cost_eur == null ? 'EUR pending FX' : moneyOrDash(h.cost_eur) }}
-                <template v-if="h.fx_to_eur != null && h.instrument.currency !== 'EUR'">
-                  · fx {{ h.fx_to_eur.toFixed(4) }}
-                </template>
               </span>
             </td>
             <td>
               {{ moneyOrDash(h.market_value_eur) }}
-              <span v-if="h.market_value_native != null" class="sub">
+              <span
+                v-if="h.market_value_native != null && (h.quote?.currency || h.instrument.currency).toUpperCase() !== 'EUR'"
+                class="sub"
+              >
                 {{ money(h.market_value_native, h.quote?.currency || h.instrument.currency) }} native
               </span>
             </td>
             <td :class="{ ok: (h.pnl_eur ?? 0) > 0, bad: (h.pnl_eur ?? 0) < 0 }">
               {{ moneyOrDash(h.pnl_eur) }}
-              <span v-if="h.pnl_native != null" class="sub">
+              <span
+                v-if="h.pnl_native != null && h.instrument.currency.toUpperCase() !== 'EUR'"
+                class="sub"
+              >
                 {{ money(h.pnl_native, h.instrument.currency) }} native
               </span>
             </td>
             <td :class="{ ok: (h.pnl_pct ?? 0) > 0, bad: (h.pnl_pct ?? 0) < 0 }">
               {{ pctOrDash(h.pnl_pct) }}
             </td>
-            <td class="row-actions">
-              <button type="button" class="ghost" @click="startEdit(h)">Edit</button>
-              <button type="button" class="danger" @click="removeHolding(h)">Delete</button>
+            <td class="daily-change" :class="dailyChangeClass(h.daily_change_pct)">
+              {{ pctOrDash(h.daily_change_pct) }}
+            </td>
+            <td class="row-actions portfolio-actions">
+              <button
+                type="button"
+                class="ghost portfolio-icon-btn"
+                :aria-label="`Edit ${h.instrument.symbol}`"
+                :title="`Edit ${h.instrument.symbol}`"
+                @click="startEdit(h)"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 20h4l11-11-4-4L4 16v4Zm12.2-16.2 4 4 1.1-1.1a1.4 1.4 0 0 0 0-2l-2-2a1.4 1.4 0 0 0-2 0l-1.1 1.1Z" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                class="danger portfolio-icon-btn"
+                :aria-label="`Delete ${h.instrument.symbol}`"
+                :title="`Delete ${h.instrument.symbol}`"
+                @click="removeHolding(h)"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm-3 6h12l-1 12H7L6 9Zm4 2v8h2v-8h-2Zm4 0v8h2v-8h-2Z" />
+                </svg>
+              </button>
             </td>
           </tr>
         </tbody>
@@ -480,3 +512,51 @@ async function removeHolding(h: Holding) {
     />
   </div>
 </template>
+
+<style scoped>
+.portfolio-icon-btn {
+  display: inline-flex;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0.3rem;
+  align-items: center;
+  justify-content: center;
+}
+
+.portfolio-actions {
+  justify-content: flex-end;
+}
+
+.portfolio-icon-btn svg {
+  width: 100%;
+  height: 100%;
+  fill: currentColor;
+}
+
+.daily-change-heading {
+  background: var(--accent-soft);
+  text-align: right;
+}
+
+.daily-change {
+  min-width: 5.5rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.daily-change--up {
+  background: #dceade;
+  color: #175b3a;
+}
+
+.daily-change--down {
+  background: #f2dddd;
+  color: #7a2323;
+}
+
+.daily-change--neutral {
+  background: #ecebe5;
+  color: var(--mute);
+}
+</style>

@@ -39,6 +39,7 @@ cp .env.example .env   # if needed
 | --- | --- |
 | Compose + portfolio only | none |
 | US quotes | `FINNHUB_API_KEY` |
+| Fundamentals | `FINNHUB_API_KEY` for US equities; `ALPHA_VANTAGE_API_KEY` for EU equities and ETFs |
 | News | `MARKETAUX_API_TOKEN` |
 | Advisory | `CLAUDE_CODE_OAUTH_TOKEN`, `TYPESAFE_API_KEY` — **never** `ANTHROPIC_API_KEY` |
 
@@ -115,33 +116,39 @@ Token thrift defaults: `ADVISORY_INTERVAL_SECONDS=86400`, `ADVISORY_MAX_SCENARIO
 
 1. Required services present → Claude research and Jev decisions show **Ready**
 2. Required services absent → their rows show **Needs attention**
-3. Finnhub, Marketaux, and FMP present → **Connected**; absent → **Not connected — optional**
+3. Finnhub, Marketaux, and Alpha Vantage present → **Connected**; absent → **Not connected — optional**
 4. Anthropic API billing configured → Claude research shows **Needs attention** and a concise
    billing warning; no environment variable name or remediation command appears
 5. **Check again** refreshes service state and exposes a local checking/disabled state
 
 ### Tracker (`behaviour/tracker.md`, `0019`, `0020`)
 
-1. `/tracker` → search (e.g. "airbus") → add with a note
+1. `/tracker` → search (e.g. "airbus") → add the name without an operator note
 2. **Ingest now** — quote / bars / fundamentals / technicals / news for the tracked name
 3. **Force run** — Tracker recommendations, four lenses, horizons **1m / 3m / 6m**
 4. `/tracker/log/<symbol>` — "Tracked, not owned"; investor profile as mandate context
-5. Record an acquisition → entry archives to Portfolio; delete the holding → tracker returns with note intact
+5. Record an acquisition → entry archives to Portfolio; delete the holding → tracker returns
 6. Adding a symbol that is already a holding → HTTP 409
+7. Tracker displays Daily % from quote versus prior-session close with green, red, or neutral
+   background, and exposes Run/Remove as labelled icon controls
 
 ## Automated (worker)
 
 Run inside Compose after `bin/up -d`:
 
 ```bash
+docker compose exec api php test_holding_daily_change.php
 docker compose exec worker python test_doctrine.py
+docker compose exec worker python test_fundamentals_adapters.py
 docker compose exec worker python test_ingestion.py
 docker compose exec worker python test_persist_e2e.py
 ```
 
 | Script | Covers |
 | --- | --- |
+| `test_holding_daily_change.php` | Portfolio and Tracker live quote versus prior-session close, including unavailable values |
 | `test_doctrine.py` | Choice parsing, loss-gate labels, mandate composition, tracker vs portfolio choice maps |
+| `test_fundamentals_adapters.py` | Finnhub/Alpha Vantage normalization, failures, symbol translation, routing and persisted daily quota |
 | `test_ingestion.py` | Completeness/scoring, ordered fallbacks, cache protection, persistent rate state, cadence isolation, unchanged-bar behavior |
 | `test_persist_e2e.py` | Persisted action is exactly what Jev decided (never rewritten); tracker verbs, `book` column, four-lens rule |
 

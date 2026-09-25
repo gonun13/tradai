@@ -49,12 +49,13 @@ Belongs to the single local portfolio. Source of truth for acquisitions is **Tra
 | symbol | Unique. The ticker as ingested |
 | instrument_id | FK → Instrument. **Mandatory** (`0019`) — ingestion routes on `instruments.region` and a Recommendation FKs to Instrument, so a name-only entry cannot be monitored or decided on |
 | name | Display name; falls back to the instrument's |
-| note | Free text: why the operator is watching it. The only field maintained after adding |
 | added_at / updated_at | Timestamps |
-| archived_at | Set when the operator buys the name (auto-promote, `0019`); cleared when the holding is deleted. Archived entries keep their note but leave the Tracker view and the agent context |
+| archived_at | Set when the operator buys the name (auto-promote, `0019`); cleared when the holding is deleted. Archived entries leave the Tracker view and the agent context |
 
 Renamed from `watchlist` in `0019`. Mutually exclusive with Holding: a symbol is in exactly one
 book at a time, and adding a tracked name that is already owned is a 409.
+The physical `note` column may remain for backwards-compatible storage, but it is no longer part
+of Tracker input, read models, or advisory context (`0024`).
 
 ### Transaction
 
@@ -190,12 +191,12 @@ Still true:
 The context blob (`AgentRun.context`, built by `worker/advisory.py::_build_context`) is now a
 stable, exposed API field. Top level: `display_currency`, `portfolio_market_value_eur`,
 `portfolio_cost_eur`, `cash_eur`, `portfolio_total_eur`, `realized_gains_ytd_eur`,
-`calendar_year`, `tracker` (compact symbol/name/note list, renamed from `watchlist` in `0019`),
+`calendar_year`, `tracker` (compact symbol/name list, renamed from `watchlist` in `0019`),
 `profiles` (`investor` / `portfolio`, raw — null where unwritten), `mandates` (the resolved text
 per book, defaults substituted — what was actually sent), `mandate` (the composed holdings text,
 kept for the log page and back-compat), `holdings` (per-instrument quantity/cost/market
 value/P&L/weights, `quote`, `fundamentals`, `technicals`, `news`, approved `thesis`), `tracked` (per tracked
-name: `book`, `symbol`, `name`, `note`, `added_at`, `quote`, `price_eur`,
+name: `book`, `symbol`, `name`, `added_at`, `quote`, `price_eur`,
 `fundamentals`, `technicals`, and `news` — but no position fields),
 `built_at`. It is written before Claude's research pass runs and carries no Claude-authored text.
 

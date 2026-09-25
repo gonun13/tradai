@@ -92,7 +92,11 @@ const keys = computed<SetupKeys | null>(() => data.value?.keys ?? null)
 type ServiceStatus = 'Ready' | 'Needs attention' | 'Connected' | 'Not connected — optional'
 
 const services = computed<
-  Array<{ key: 'claude' | 'jev' | 'finnhub' | 'marketaux' | 'fmp'; name: string; status: ServiceStatus }>
+  Array<{
+    key: 'claude' | 'jev' | 'finnhub' | 'marketaux' | 'alpha_vantage'
+    name: string
+    status: ServiceStatus
+  }>
 >(() => {
   if (!keys.value) return []
 
@@ -119,9 +123,9 @@ const services = computed<
       status: keys.value.marketaux ? 'Connected' : 'Not connected — optional',
     },
     {
-      key: 'fmp',
-      name: 'FMP',
-      status: keys.value.fmp ? 'Connected' : 'Not connected — optional',
+      key: 'alpha_vantage',
+      name: 'Alpha Vantage',
+      status: keys.value.alpha_vantage ? 'Connected' : 'Not connected — optional',
     },
   ]
 })

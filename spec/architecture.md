@@ -30,7 +30,7 @@ Audience: engineering. Structure, boundaries, and constraints for a solo, local 
 | **Slim PHP API** | Local HTTP API: holdings CRUD, read models for dashboard, alert ack, trigger “run now”. Owns portfolio writes. |
 | **SQLite** | Single-node state on a Docker volume: portfolio, cached bars, agent runs, recommendations, alerts. |
 | **Python worker** | Scheduled ingestion + analysis. Computes technicals locally; calls market/news APIs; invokes Claude Agent CLI + Jev with **full portfolio context** for decisions. Writes results via API or shared DB. |
-| **Scheduler** | Worker loop with persisted per-instrument due state — quotes 15m, bars/news daily, fundamentals 7d, technicals on bar change; **agent advisory once per day after US markets close**. |
+| **Scheduler** | Worker loop with persisted per-instrument due state — quotes 15m, bars/news daily, complete fundamentals 7d and missing/partial fundamentals daily, technicals on bar change; **agent advisory once per day after US markets close**. |
 
 ## Client vs server vs background
 

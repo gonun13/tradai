@@ -7,20 +7,22 @@ import requests
 
 from adapters.base import AdapterMetadata, RatePolicy
 from adapters.errors import (
-    AdapterPermanentError, AdapterQuotaDeferredError, AdapterRateLimitError,
-    AdapterTransientError, AdapterUnsupportedError, SymbolNotFoundError,
+    AdapterPermanentError, AdapterRateLimitError, AdapterTransientError,
+    AdapterUnsupportedError, SymbolNotFoundError,
 )
 
 _UA = "Mozilla/5.0 (compatible; Tradai/0.2; +local)"
 
 
-class FmpFundamentalsAdapter:
-    name = "fmp"
+class FinnhubFundamentalsAdapter:
+    """US equity profile and basic metrics normalized as one Finnhub snapshot."""
+
+    name = "finnhub"
 
     def __init__(self, api_key: str) -> None:
         self.api_key = api_key.strip()
         self.last_response_headers: dict[str, str] = {}
-        self.base_url = "https://financialmodelingprep.com/stable"
+        self.base_url = "https://finnhub.io/api/v1"
 
     def enabled(self) -> bool:
         return bool(self.api_key)
@@ -29,107 +31,91 @@ class FmpFundamentalsAdapter:
     def metadata(self) -> AdapterMetadata:
         return AdapterMetadata(
             provider=self.name,
-            regions=frozenset({"us", "eu"}),
-            instrument_kinds=frozenset({"equity", "etf"}),
+            regions=frozenset({"us"}),
+            instrument_kinds=frozenset({"equity"}),
             operations=frozenset({"fundamentals"}),
             enabled=self.enabled(),
             rate_policy=RatePolicy(
-                minimum_interval_seconds=0.3, window_seconds=86400,
-                window_limit=250, request_cost=4,
+                minimum_interval_seconds=1.05, window_seconds=60,
+                window_limit=60, request_cost=2,
             ),
         )
 
-    def get_fundamentals(self, symbol: str, kind: str) -> dict[str, Any]:
+    def get_fundamentals(
+        self, symbol: str, kind: str, mic: str | None = None
+    ) -> dict[str, Any]:
         if not self.enabled():
-            raise RuntimeError("FMP_API_KEY not set")
+            raise RuntimeError("FINNHUB_API_KEY not set")
         sym = symbol.upper()
-        if kind == "etf":
-            info = self._one("etf/info", sym)
-            holdings = self._many("etf/holdings", sym)
-            sectors = self._many("etf/sector-weightings", sym)
-            profile = self._one("profile", sym, optional=True)
-            return {
-                "symbol": sym,
-                "name": _pick(info, "name", "fundName") or _pick(profile, "companyName"),
-                "currency": _pick(info, "currency") or _pick(profile, "currency"),
-                "exchange": _pick(info, "exchange", "exchangeShortName") or _pick(profile, "exchange"),
-                "country": _pick(info, "country") or _pick(profile, "country"),
-                "category": _pick(info, "category"),
-                "aum": _pick(info, "assetsUnderManagement", "aum"),
-                "expense_ratio": _pick(info, "expenseRatio", "expenseRatioPercentage"),
-                "holdings": holdings[:25],
-                "allocations": sectors,
-                "as_of": datetime.now(timezone.utc).isoformat(),
-            }
-
-        profile = self._one("profile", sym)
-        ratios = self._one("ratios-ttm", sym, optional=True)
-        metrics = self._one("key-metrics-ttm", sym, optional=True)
+        profile = self._get("stock/profile2", sym)
+        metrics = self._get("stock/metric", sym, metric="all")
+        metric = metrics.get("metric") if isinstance(metrics.get("metric"), dict) else {}
+        if not profile:
+            raise SymbolNotFoundError(symbol, self.name, "empty company profile")
         return {
             "symbol": sym,
-            "name": _pick(profile, "companyName"),
+            "name": _pick(profile, "name"),
             "currency": _pick(profile, "currency"),
-            "exchange": _pick(profile, "exchangeShortName", "exchange"),
+            "exchange": _pick(profile, "exchange"),
             "country": _pick(profile, "country"),
-            "sector": _pick(profile, "sector"),
-            "industry": _pick(profile, "industry"),
-            "description": _pick(profile, "description"),
-            "market_cap": _pick(profile, "marketCap", "mktCap"),
-            "pe_ratio": _pick(ratios, "priceToEarningsRatioTTM", "priceEarningsRatioTTM"),
-            "price_to_book": _pick(ratios, "priceToBookRatioTTM"),
-            "enterprise_value": _pick(metrics, "enterpriseValueTTM"),
-            "profit_margin": _pick(ratios, "netProfitMarginTTM"),
-            "operating_margin": _pick(ratios, "operatingProfitMarginTTM"),
-            "roe": _pick(ratios, "returnOnEquityTTM"),
-            "roa": _pick(ratios, "returnOnAssetsTTM"),
-            "revenue_growth": _pick(ratios, "revenueGrowthTTM"),
-            "earnings_growth": _pick(ratios, "netIncomeGrowthTTM"),
-            "debt_to_equity": _pick(ratios, "debtEquityRatioTTM", "debtToEquityRatioTTM"),
-            "current_ratio": _pick(ratios, "currentRatioTTM"),
-            "quick_ratio": _pick(ratios, "quickRatioTTM"),
+            "industry": _pick(profile, "finnhubIndustry"),
+            # Finnhub documents marketCapitalization in millions of the profile currency.
+            "market_cap": _scaled(_pick(profile, "marketCapitalization"), 1_000_000),
+            "pe_ratio": _number(_pick(metric, "peTTM", "peBasicExclExtraTTM")),
+            "price_to_book": _number(_pick(metric, "pbAnnual", "pbQuarterly")),
+            "enterprise_value": _scaled(
+                _pick(metric, "enterpriseValue", "enterpriseValueAnnual"), 1_000_000
+            ),
+            "profit_margin": _percentage(_pick(metric, "netProfitMarginTTM")),
+            "operating_margin": _percentage(_pick(metric, "operatingMarginTTM")),
+            "roe": _percentage(_pick(metric, "roeTTM", "roeRfy")),
+            "roa": _percentage(_pick(metric, "roaTTM", "roaRfy")),
+            "revenue_growth": _percentage(_pick(
+                metric, "revenueGrowthTTMYoy", "revenueGrowthQuarterlyYoy"
+            )),
+            "earnings_growth": _percentage(_pick(
+                metric, "epsGrowthTTMYoy", "epsGrowthQuarterlyYoy"
+            )),
+            "debt_to_equity": _percentage(_pick(
+                metric, "totalDebt/totalEquityQuarterly", "totalDebt/totalEquityAnnual"
+            )),
+            "current_ratio": _number(_pick(metric, "currentRatioQuarterly", "currentRatioAnnual")),
+            "quick_ratio": _number(_pick(metric, "quickRatioQuarterly", "quickRatioAnnual")),
             "as_of": datetime.now(timezone.utc).isoformat(),
         }
 
-    def _many(self, endpoint: str, symbol: str, *, optional: bool = False) -> list[dict[str, Any]]:
+    def _get(self, endpoint: str, symbol: str, **params: str) -> dict[str, Any]:
         try:
             r = requests.get(
                 f"{self.base_url}/{endpoint}",
-                params={"symbol": symbol, "apikey": self.api_key},
+                params={"symbol": symbol, "token": self.api_key, **params},
                 timeout=45,
             )
         except requests.RequestException as exc:
-            raise AdapterTransientError(f"FMP {endpoint} request failed for {symbol}") from exc
+            raise AdapterTransientError(f"Finnhub {endpoint} request failed for {symbol}") from exc
         self.last_response_headers = dict(r.headers)
         if r.status_code == 429:
             raise AdapterRateLimitError(
-                f"FMP {endpoint} rate limited", retry_after=_retry_after(r.headers.get("Retry-After"))
+                f"Finnhub {endpoint} rate limited",
+                retry_after=_retry_after(r.headers.get("Retry-After")),
             )
-        if r.status_code == 402:
-            raise AdapterQuotaDeferredError(f"FMP {endpoint} plan quota exhausted")
         if r.status_code == 403:
-            if optional:
-                return []
-            raise AdapterUnsupportedError(f"FMP {endpoint} is not included in this plan")
-        if optional and r.status_code in (402, 403, 404):
-            return []
+            raise AdapterUnsupportedError(f"Finnhub {endpoint} is not included in this plan")
         if r.status_code == 404:
             raise SymbolNotFoundError(symbol, self.name, endpoint)
         if r.status_code >= 500:
-            raise AdapterTransientError(f"FMP {endpoint} HTTP {r.status_code}")
+            raise AdapterTransientError(f"Finnhub {endpoint} HTTP {r.status_code}")
         if r.status_code >= 400:
-            raise AdapterPermanentError(f"FMP {endpoint} HTTP {r.status_code}")
-        data = r.json()
-        if isinstance(data, dict):
-            rows = data.get("data") or data.get("results") or []
-        else:
-            rows = data
-        return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
-
-    def _one(self, endpoint: str, symbol: str, *, optional: bool = False) -> dict[str, Any]:
-        rows = self._many(endpoint, symbol, optional=optional)
-        if not rows and not optional:
-            raise SymbolNotFoundError(symbol, self.name, endpoint)
-        return rows[0] if rows else {}
+            raise AdapterPermanentError(f"Finnhub {endpoint} HTTP {r.status_code}")
+        try:
+            data = r.json()
+        except ValueError as exc:
+            raise AdapterPermanentError(f"Finnhub {endpoint} returned malformed JSON") from exc
+        if not isinstance(data, dict):
+            raise AdapterPermanentError(f"Finnhub {endpoint} returned an invalid payload")
+        if data.get("error"):
+            raise AdapterPermanentError(f"Finnhub {endpoint} returned an error")
+        return data
 
 
 class YFinanceFundamentalsAdapter:
@@ -158,7 +144,9 @@ class YFinanceFundamentalsAdapter:
             rate_policy=RatePolicy(minimum_interval_seconds=0.25),
         )
 
-    def get_fundamentals(self, symbol: str, kind: str) -> dict[str, Any]:
+    def get_fundamentals(
+        self, symbol: str, kind: str, mic: str | None = None
+    ) -> dict[str, Any]:
         r = requests.get(
             f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}",
             params={"modules": self.modules},
@@ -264,6 +252,26 @@ def _pick(row: dict[str, Any], *keys: str) -> Any:
         if value is not None and value != "":
             return value
     return None
+
+
+def _number(value: Any) -> float | None:
+    if value is None or value == "" or str(value).strip().lower() in {"none", "null", "-"}:
+        return None
+    try:
+        result = float(str(value).replace(",", ""))
+        return result if result == result else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _scaled(value: Any, factor: float) -> float | None:
+    number = _number(value)
+    return number * factor if number is not None else None
+
+
+def _percentage(value: Any) -> float | None:
+    number = _number(str(value).rstrip("%") if value is not None else None)
+    return number / 100 if number is not None else None
 
 
 def _retry_after(value: str | None) -> float | None:

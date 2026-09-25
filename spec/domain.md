@@ -11,7 +11,7 @@ Audience: product / planning. Concepts, rules, and invariants for Tradai.
 | **Instrument** | A tradeable identity: ISIN (when available), symbol, MIC/exchange, currency, name; **kind** = equity or ETF; **region/venue** covers EU and US listings. ETFs are in scope when listed and bought on the same regular exchange markets as stocks (not a separate venue class). |
 | **Holding** | A position in the portfolio: quantity, average cost, optional notes; references an Instrument. |
 | **Thesis** | The recorded reason a Holding is owned, plus named falsifiers. Versioned. Claude drafts and records it automatically; the operator may edit it (`0018`). |
-| **Tracked name** | An entry on the Tracker. Carries an Instrument, a note, and the date it was tracked. Buying it archives the entry (auto-promote, `0019`). Was "watchlist candidate" before `0019`. |
+| **Tracked name** | An entry on the Tracker. Carries an Instrument and the date it was tracked. Buying it archives the entry (auto-promote, `0019`; note removal, `0024`). Was "watchlist candidate" before `0019`. |
 | **Book** | Which of the two a subject belongs to: `portfolio` or `tracker`. Recorded on every Recommendation, because a name can move between them. |
 | **Quote / PriceBar** | Latest quote snapshot and OHLCV history used for monitoring and technicals. |
 | **NewsItem** | Optional cached news snippet, optionally tagged to Instrument(s). |

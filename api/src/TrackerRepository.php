@@ -13,7 +13,7 @@ use PDO;
  *
  * Every entry carries a real instrument, because the ingest loop routes on `region` and a
  * recommendation FKs to `instruments`. Buying a tracked name archives its row rather than
- * deleting it, so the note and the reason it was tracked survive the promotion.
+ * deleting it, so its tracking history survives the promotion.
  */
 final class TrackerRepository
 {
@@ -28,7 +28,7 @@ final class TrackerRepository
     public function all(bool $includeArchived = false): array
     {
         $sql =
-            'SELECT t.id, t.symbol, t.instrument_id, t.name, t.note, t.added_at, t.updated_at,
+            'SELECT t.id, t.symbol, t.instrument_id, t.name, t.added_at, t.updated_at,
                     t.archived_at,
                     i.currency, i.kind, i.region, i.mic, i.isin, i.name AS instrument_name,
                     q.price AS quote_price, q.currency AS quote_currency, q.as_of AS quote_as_of,
@@ -111,19 +111,17 @@ final class TrackerRepository
         ], $now);
 
         $this->db->prepare(
-            'INSERT INTO tracker (symbol, instrument_id, name, note, added_at, updated_at, archived_at)
-             VALUES (:symbol, :instrument_id, :name, :note, :added_at, :updated_at, NULL)
+            'INSERT INTO tracker (symbol, instrument_id, name, added_at, updated_at, archived_at)
+             VALUES (:symbol, :instrument_id, :name, :added_at, :updated_at, NULL)
              ON CONFLICT(symbol) DO UPDATE SET
                 instrument_id = excluded.instrument_id,
                 name = COALESCE(excluded.name, tracker.name),
-                note = COALESCE(excluded.note, tracker.note),
                 updated_at = excluded.updated_at,
                 archived_at = NULL'
         )->execute([
             'symbol' => $symbol,
             'instrument_id' => $instrumentId,
             'name' => $this->nullableString($input['name'] ?? null),
-            'note' => $this->nullableString($input['note'] ?? null),
             'added_at' => $now,
             'updated_at' => $now,
         ]);
@@ -143,7 +141,7 @@ final class TrackerRepository
     {
         $sets = [];
         $params = ['id' => $id, 'updated_at' => gmdate('c')];
-        foreach (['name', 'note'] as $field) {
+        foreach (['name'] as $field) {
             if (array_key_exists($field, $input)) {
                 $sets[] = $field . ' = :' . $field;
                 $params[$field] = $this->nullableString($input[$field]);
@@ -183,7 +181,7 @@ final class TrackerRepository
 
     /**
      * Auto-promote (0019): the operator bought a tracked name, so it leaves the Tracker
-     * view and the agent context but keeps its note and added date. No-op when untracked.
+     * view and the agent context but keeps its added date. No-op when untracked.
      */
     public function archiveBySymbol(string $symbol): void
     {
@@ -256,7 +254,6 @@ final class TrackerRepository
             'symbol' => (string) $r['symbol'],
             'instrument_id' => (int) $r['instrument_id'],
             'name' => $r['name'] ?? $r['instrument_name'],
-            'note' => $r['note'],
             'added_at' => $r['added_at'],
             'updated_at' => $r['updated_at'],
             'archived_at' => $r['archived_at'],
@@ -277,6 +274,7 @@ final class TrackerRepository
             // There is no cost basis to show for an unowned name, so the EUR figure the
             // Tracker table renders is just the quote converted (0010: UI is always EUR).
             'price_eur' => $price !== null && $rate !== null ? round($price * $rate, 4) : null,
+            'daily_change_pct' => $this->dailyChangePct((int) $r['instrument_id'], $price, $r['quote_as_of']),
             'technicals' => $features !== [] ? [
                 'as_of' => $r['technicals_as_of'],
                 'source' => $r['technicals_source'],
@@ -286,6 +284,41 @@ final class TrackerRepository
             'fundamentals' => $this->mapFundamentals($r),
             'news' => $this->newsForInstrument((int) $r['instrument_id']),
         ];
+    }
+
+    private function dailyChangePct(int $instrumentId, ?float $quotePrice, mixed $quoteAsOf): ?float
+    {
+        if ($quotePrice === null || $quoteAsOf === null) {
+            return null;
+        }
+
+        $quoteDate = substr((string) $quoteAsOf, 0, 10);
+        if (!is_finite($quotePrice) || preg_match('/^\d{4}-\d{2}-\d{2}$/', $quoteDate) !== 1) {
+            return null;
+        }
+
+        [$year, $month, $day] = array_map('intval', explode('-', $quoteDate));
+        if (!checkdate($month, $day, $year)) {
+            return null;
+        }
+
+        $stmt = $this->db->prepare(
+            'SELECT close FROM price_bars
+             WHERE instrument_id = :id AND bar_date < :quote_date
+             ORDER BY bar_date DESC LIMIT 1'
+        );
+        $stmt->execute(['id' => $instrumentId, 'quote_date' => $quoteDate]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            return null;
+        }
+
+        $previousClose = (float) $row['close'];
+        if (!is_finite($previousClose) || $previousClose <= 0.0) {
+            return null;
+        }
+
+        return (($quotePrice - $previousClose) / $previousClose) * 100.0;
     }
 
     /** @param array<string, mixed> $row */

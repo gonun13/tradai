@@ -9,10 +9,14 @@ from pathlib import Path
 from typing import Any, Callable
 
 from adapters.base import CandidateResult, Selection, select_first_complete
+from adapters.alpha_vantage import (
+    AlphaVantageEquityFundamentalsAdapter,
+    AlphaVantageEtfFundamentalsAdapter,
+)
 from adapters.finnhub import FinnhubHistoricalAdapter
 from adapters.finnhub_news import FinnhubNewsAdapter
 from adapters.frankfurter import FrankfurterFxAdapter
-from adapters.fundamentals import FmpFundamentalsAdapter, YFinanceFundamentalsAdapter
+from adapters.fundamentals import FinnhubFundamentalsAdapter, YFinanceFundamentalsAdapter
 from adapters.ibkr_stub import IbkrHistoricalAdapter
 from adapters.local_technicals import LocalTechnicalsAdapter
 from adapters.marketaux import MarketauxNewsAdapter
@@ -32,6 +36,7 @@ QUOTE_CADENCE = 15 * 60
 BARS_CADENCE = 24 * 60 * 60
 NEWS_CADENCE = 24 * 60 * 60
 FUNDAMENTALS_CADENCE = 7 * 24 * 60 * 60
+FUNDAMENTALS_GAP_CADENCE = 24 * 60 * 60
 FX_CADENCE = 12 * 60 * 60
 
 
@@ -56,7 +61,10 @@ class MarketRefreshService:
         self.ibkr = IbkrHistoricalAdapter(os.environ.get("IBKR_ENABLED", "0") == "1")
         self.marketaux = MarketauxNewsAdapter(os.environ.get("MARKETAUX_API_TOKEN", ""))
         self.finnhub_news = FinnhubNewsAdapter(finnhub_key)
-        self.fmp = FmpFundamentalsAdapter(os.environ.get("FMP_API_KEY", ""))
+        self.finnhub_fundamentals = FinnhubFundamentalsAdapter(finnhub_key)
+        alpha_vantage_key = os.environ.get("ALPHA_VANTAGE_API_KEY", "")
+        self.alpha_vantage_equity = AlphaVantageEquityFundamentalsAdapter(alpha_vantage_key)
+        self.alpha_vantage_etf = AlphaVantageEtfFundamentalsAdapter(alpha_vantage_key)
         self.yf_fundamentals = YFinanceFundamentalsAdapter()
         self.local_technicals = LocalTechnicalsAdapter()
 
@@ -143,7 +151,9 @@ class MarketRefreshService:
         if name not in names:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
 
-    def refresh(self, *, force_news: bool = False) -> dict[str, Any]:
+    def refresh(
+        self, *, force_news: bool = False, manual_gap_retry: bool = False
+    ) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
         now_iso = now.isoformat()
         ingested: dict[str, set[int]] = {
@@ -197,9 +207,11 @@ class MarketRefreshService:
                         changed_bars.add(int(inst["id"]))
 
             for inst in self._oldest_first(conn, instruments, "fundamentals"):
-                if self._due(conn, int(inst["id"]), "fundamentals", now):
+                iid = int(inst["id"])
+                gap = self._fundamentals_gap(conn, iid)
+                if self._fundamentals_due(conn, iid, now) or (manual_gap_retry and gap):
                     if self._refresh_fundamentals(conn, limiter, inst, results, now):
-                        ingested["fundamentals"].add(int(inst["id"]))
+                        ingested["fundamentals"].add(iid)
 
             news_due = 0
             for inst in self._oldest_first(conn, instruments, "news"):
@@ -235,7 +247,7 @@ class MarketRefreshService:
     def _instruments(self, conn: sqlite3.Connection) -> list[sqlite3.Row]:
         return conn.execute(
             """
-            SELECT i.id, i.symbol, i.currency, i.region, i.name, i.kind, i.isin,
+            SELECT i.id, i.symbol, i.currency, i.region, i.name, i.kind, i.isin, i.mic,
                    CASE WHEN h.instrument_id IS NOT NULL THEN 'portfolio' ELSE 'tracker' END AS book
             FROM instruments i
             LEFT JOIN holdings h ON h.instrument_id = i.id
@@ -260,10 +272,12 @@ class MarketRefreshService:
     def _historical_registry(self, region: str) -> list[Any]:
         return [self.finnhub, self.yfinance] if region == "us" else [self.yfinance]
 
-    def _fundamentals_registry(self, region: str) -> list[Any]:
-        return [self.fmp, self.yf_fundamentals] if region == "us" else [
-            self.yf_fundamentals, self.fmp
-        ]
+    def _fundamentals_registry(self, region: str, kind: str) -> list[Any]:
+        if kind == "etf":
+            return [self.alpha_vantage_etf, self.yf_fundamentals]
+        if region == "us":
+            return [self.finnhub_fundamentals, self.alpha_vantage_equity]
+        return [self.alpha_vantage_equity, self.yf_fundamentals]
 
     def _news_registry(self, region: str) -> list[Any]:
         return [self.marketaux, self.finnhub_news] if region == "us" else [self.marketaux]
@@ -290,9 +304,9 @@ class MarketRefreshService:
             before_call=limiter.before_call, after_call=limiter.after_call,
         )
         for attempt in selection.attempts:
-            if attempt.status == "rate-limited":
-                # Retry-After is already captured from response headers where present.
-                limiter.defer(attempt.provider, None)
+            if attempt.status in ("rate-limited", "quota-deferred"):
+                # Classified failures carry a provider response or policy retry delay.
+                limiter.defer(attempt.provider, attempt.retry_after)
         return selection
 
     def _refresh_quote(
@@ -404,9 +418,9 @@ class MarketRefreshService:
         iid, symbol = int(inst["id"]), str(inst["symbol"])
         region, kind = resolve_region(symbol, inst["region"]), str(inst["kind"] or "equity")
         selection = self._select(
-            conn, limiter, self._fundamentals_registry(region), operation="fundamentals",
+            conn, limiter, self._fundamentals_registry(region, kind), operation="fundamentals",
             region=region, kind=kind,
-            invoke=lambda adapter: adapter.get_fundamentals(symbol, kind),
+            invoke=lambda adapter: adapter.get_fundamentals(symbol, kind, inst["mic"]),
             evaluate=lambda provider, payload: evaluate_fundamentals(provider, payload, kind),
         )
         candidate = selection.selected
@@ -445,8 +459,11 @@ class MarketRefreshService:
                 "complete": candidate.complete, "score": candidate.score,
                 "missing_fields": candidate.missing_fields, "accepted": accepted,
             })
+        complete_cache = not self._fundamentals_gap(conn, iid)
+        cadence = FUNDAMENTALS_CADENCE if complete_cache else FUNDAMENTALS_GAP_CADENCE
         self._record_state(
-            conn, iid, "fundamentals", FUNDAMENTALS_CADENCE, selection, accepted, now
+            conn, iid, "fundamentals", cadence, selection, accepted, now,
+            effective_complete=complete_cache,
         )
         self._report_attempts(symbol, "fundamentals", selection, results)
         return accepted
@@ -677,6 +694,30 @@ class MarketRefreshService:
             return True
 
     @staticmethod
+    def _fundamentals_gap(conn: sqlite3.Connection, instrument_id: int) -> bool:
+        row = conn.execute(
+            "SELECT completeness_state FROM fundamentals WHERE instrument_id=?",
+            (instrument_id,),
+        ).fetchone()
+        return row is None or str(row["completeness_state"]) != "complete"
+
+    def _fundamentals_due(
+        self, conn: sqlite3.Connection, instrument_id: int, now: datetime
+    ) -> bool:
+        if not self._fundamentals_gap(conn, instrument_id):
+            return self._due(conn, instrument_id, "fundamentals", now)
+        state = self._state(conn, instrument_id, "fundamentals")
+        if state is None or not state["last_attempt_at"]:
+            return True
+        try:
+            attempted = datetime.fromisoformat(
+                str(state["last_attempt_at"]).replace("Z", "+00:00")
+            )
+            return attempted + timedelta(seconds=FUNDAMENTALS_GAP_CADENCE) <= now
+        except ValueError:
+            return True
+
+    @staticmethod
     def _state(
         conn: sqlite3.Connection, instrument_id: int, operation: str
     ) -> sqlite3.Row | None:
@@ -688,11 +729,16 @@ class MarketRefreshService:
     def _record_state(
         self, conn: sqlite3.Connection, instrument_id: int, operation: str,
         cadence: int, selection: Selection, accepted: bool, now: datetime,
-        *, fingerprint: str | None = None,
+        *, fingerprint: str | None = None, effective_complete: bool | None = None,
     ) -> None:
         previous = self._state(conn, instrument_id, operation)
         selected = selection.selected
-        complete = bool(selected and selected.complete)
+        attempt_complete = bool(selected and selected.complete)
+        complete = (
+            effective_complete
+            if effective_complete is not None
+            else attempt_complete
+        )
         gap_streak = 0 if complete else (int(previous["gap_streak"] or 0) if previous else 0) + 1
         next_due = now + timedelta(seconds=max(0, cadence))
         conn.execute(
@@ -719,7 +765,7 @@ class MarketRefreshService:
             """,
             (
                 instrument_id, operation, cadence, now.isoformat(),
-                now.isoformat() if complete else None,
+                now.isoformat() if attempt_complete else None,
                 selected.provider if selected and accepted else None,
                 selected.score if selected and accepted else None,
                 json.dumps(selected.missing_fields if selected else ["no_result"]),

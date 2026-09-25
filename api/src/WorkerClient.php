@@ -15,9 +15,9 @@ final class WorkerClient
     /** @return array<string, mixed> */
     public function refreshMarket(bool $forceNews = false): array
     {
-        $path = '/refresh';
+        $path = '/refresh?manual_gap_retry=1';
         if ($forceNews) {
-            $path .= '?force_news=1';
+            $path .= '&force_news=1';
         }
         return $this->postJson($path, 120);
     }
