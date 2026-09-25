@@ -11,6 +11,7 @@ use Tradai\Api\AgentRepository;
 use Tradai\Api\AlertRepository;
 use Tradai\Api\Database;
 use Tradai\Api\HoldingRepository;
+use Tradai\Api\HistoryRepository;
 use Tradai\Api\OutcomeRepository;
 use Tradai\Api\SettingsRepository;
 use Tradai\Api\InstrumentRepository;
@@ -28,6 +29,7 @@ $dataDir = getenv('TRADAI_DATA_DIR') ?: '/data';
 $workerBase = getenv('WORKER_BASE_URL') ?: 'http://worker:8090';
 $pdo = Database::connection($dataDir);
 $holdings = new HoldingRepository($pdo);
+$history = new HistoryRepository($pdo);
 $agents = new AgentRepository($pdo);
 $alerts = new AlertRepository($pdo);
 $outcomes = new OutcomeRepository($pdo);
@@ -93,6 +95,7 @@ $app->get('/', function (Request $request, Response $response) use ($json): Resp
             'GET /health',
             'GET /setup',
             'GET /holdings',
+            'GET /instruments/{id}/history?range=1y|2y|5y|max',
             'POST /holdings',
             'PUT /holdings/{id}',
             'DELETE /holdings/{id}',
@@ -182,7 +185,7 @@ $app->get('/setup', function (Request $request, Response $response) use ($json):
     ]);
 });
 
-$app->get('/context/preview', function (Request $request, Response $response) use ($json, $holdings, $tracker): Response {
+$app->get('/context/preview', function (Request $request, Response $response) use ($json, $holdings, $tracker, $settings): Response {
     $book = strtolower(trim((string) ($request->getQueryParams()['book'] ?? 'portfolio')));
     if (!in_array($book, ['portfolio', 'tracker'], true)) {
         throw new \InvalidArgumentException('book must be portfolio or tracker');
@@ -216,28 +219,35 @@ $app->get('/context/preview', function (Request $request, Response $response) us
         'ok' => true,
         'stage' => '7',
         'book' => $book,
-        'display_currency' => 'EUR',
+        'display_currency' => $settings->portfolio()['display_currency'],
         'instruments' => $preview,
     ]);
 });
 
-$app->get('/holdings', function (Request $request, Response $response) use ($json, $holdings): Response {
+$app->get('/holdings', function (Request $request, Response $response) use ($json, $holdings, $settings): Response {
     $rows = $holdings->all();
-    $totalEur = 0.0;
-    $haveEur = false;
+    $totalDisplay = 0.0;
+    $complete = $rows !== [];
     foreach ($rows as $h) {
-        if (isset($h['market_value_eur']) && $h['market_value_eur'] !== null) {
-            $totalEur += (float) $h['market_value_eur'];
-            $haveEur = true;
+        if (($h['market_value_display'] ?? null) === null) {
+            $complete = false;
+        } else {
+            $totalDisplay += (float) $h['market_value_display'];
         }
     }
+    $displayCurrency = $settings->portfolio()['display_currency'];
 
     return $json($response, [
         'ok' => true,
         'holdings' => $rows,
-        'display_currency' => 'EUR',
-        'portfolio_market_value_eur' => $haveEur ? $totalEur : null,
+        'display_currency' => $displayCurrency,
+        'portfolio_market_value_display' => $complete ? round($totalDisplay, 2) : null,
     ]);
+});
+
+$app->get('/instruments/{id}/history', function (Request $request, Response $response, array $args) use ($json, $history): Response {
+    $range = (string) ($request->getQueryParams()['range'] ?? '5y');
+    return $json($response, $history->forInstrument((int) $args['id'], $range));
 });
 
 $app->post('/holdings', function (Request $request, Response $response) use ($json, $holdings, $tracker): Response {
@@ -456,8 +466,12 @@ $app->delete('/theses/{id}', function (Request $request, Response $response, arr
 
 // --- 0019: the tracker — a second book, ingested and researched like the portfolio ----
 
-$app->get('/tracker', function (Request $request, Response $response) use ($json, $tracker): Response {
-    return $json($response, ['ok' => true, 'tracker' => $tracker->all()]);
+$app->get('/tracker', function (Request $request, Response $response) use ($json, $tracker, $settings): Response {
+    return $json($response, [
+        'ok' => true,
+        'tracker' => $tracker->all(),
+        'display_currency' => $settings->portfolio()['display_currency'],
+    ]);
 });
 
 $app->post('/tracker', function (Request $request, Response $response) use ($json, $tracker): Response {

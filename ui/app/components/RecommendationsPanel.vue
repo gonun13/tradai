@@ -33,6 +33,21 @@ const bySymbol = computed(() => {
 
 const infoNeeds = computed(() => props.run?.info_needs ?? [])
 
+// 0028: every explained row carries the run-wide market read it was written against. Prefer a
+// fresh one; on a day where everything carried, show the deciding run's read and say so.
+const marketRead = computed(() => {
+  const explained = mine.value.filter((r) => r.explanation?.market_read)
+  const fresh = explained.find((r) => !r.carried_from_run_id)
+  const pick = fresh ?? explained[0]
+  if (!pick?.explanation?.market_read) {
+    return null
+  }
+  return {
+    text: pick.explanation.market_read,
+    from: fresh ? null : pick.carried_from_run_id,
+  }
+})
+
 const emptyLabel = computed(() =>
   props.book === 'tracker'
     ? 'No tracker recommendations in this run.'
@@ -51,20 +66,26 @@ function lensLine(recs: Recommendation[]) {
     return null
   }
   // Internal signal names only — the thesis reasoning behind them stays off-screen.
-  // Both books use the same four lenses; old runs may still have a missing key.
-  const display: Record<string, string> = {
-    thesis: props.book === 'tracker' ? 'case' : 'fundamentals',
-    news: 'news',
-    technicals: 'technicals',
-  }
+  // 0027: lenses follow the ingestion layers. Runs before it stored `thesis` where
+  // `fundamentals` now sits.
+  const fundamentalsLabel = props.book === 'tracker' ? 'case' : 'fundamentals'
   const parts: string[] = []
-  for (const key of ['thesis', 'news', 'technicals'] as const) {
-    const a = lenses[key]?.action
+  for (const key of ['historical', 'fundamentals', 'technicals', 'news'] as const) {
+    const a = (lenses[key] ?? (key === 'fundamentals' ? lenses.thesis : undefined))?.action
     if (a) {
-      parts.push(`${display[key]}:${a}`)
+      parts.push(`${key === 'fundamentals' ? fundamentalsLabel : key}:${a}`)
     }
   }
   return parts.length ? parts.join(' · ') : null
+}
+
+function carriedLine(recs: Recommendation[]) {
+  const r = recs[0]
+  if (!r?.carried_from_run_id) {
+    return null
+  }
+  const on = r.carried_from_at ? ` (${r.carried_from_at.slice(0, 10)})` : ''
+  return `unchanged — carried from run #${r.carried_from_run_id}${on}`
 }
 
 function logPath(symbol: string) {
@@ -107,6 +128,12 @@ function onLogClick(event: Event, rec: Recommendation | undefined) {
     <p v-if="run?.error" class="bad">{{ run.error }}</p>
     <pre v-if="run?.log" class="log">{{ run.log }}</pre>
 
+    <div v-if="marketRead" class="market-read">
+      <h2>Market read</h2>
+      <p class="rationale">{{ marketRead.text }}</p>
+      <p v-if="marketRead.from" class="sub">From run #{{ marketRead.from }} — nothing was re-decided this run.</p>
+    </div>
+
     <!-- Info-needs are run-wide (they plan the next ingest), so both modules show them. -->
     <div v-if="infoNeeds.length" class="info-needs">
       <h2>Info-needs (ingest planning)</h2>
@@ -140,6 +167,9 @@ function onLogClick(event: Event, rec: Recommendation | undefined) {
         </span>
       </p>
       <p v-if="lensLine(recs)" class="sub lenses">supporting {{ lensLine(recs) }}</p>
+      <p v-if="carriedLine(recs)" class="sub">{{ carriedLine(recs) }}</p>
+      <p v-if="recs[0]?.explanation" class="rationale">{{ recs[0].explanation.text }}</p>
+      <p v-if="recs[0]?.explanation?.tension" class="sub">Tension: {{ recs[0].explanation.tension }}</p>
       <!-- 0013's `better_use` finally has somewhere to point: the named alternative lives
            in the other module, so link straight to it. -->
       <p v-for="r in recs.filter((x) => x.pair_symbol)" :key="`pair-${r.id}`" class="sub">

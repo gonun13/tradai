@@ -26,9 +26,23 @@ Referenced by holdings, bars, recommendations, and optionally news tags. Same ta
 
 ### Presentation currency
 
-- **UI money figures are always EUR** (position values, portfolio totals, aggregated P&L, cost shown in portfolio summaries).
-- Store native quote currency and amounts as needed; convert to EUR for read models / dashboard.
-- FX rates used for conversion are local/cacheable; provider = **Frankfurter** (`0006`).
+- `settings.display_currency` is `EUR` | `USD` | `GBP` | `CHF`; missing/legacy installations default to EUR (`0025`).
+- Store native quote currency and amounts. Converted read models use the selected display currency; it is never an inferred instrument currency.
+- `cash` and `realized_gains_ytd_override` are source-aware `{ amount, currency }` settings. Legacy `cash_eur` and `realized_gains_ytd_override_eur` values migrate once with `currency: EUR`.
+- FX rates are local/cacheable Frankfurter `base → EUR` pivots (`0006`). `base → display = base_to_eur / display_to_eur`.
+- Refresh covers instrument currencies, quote currencies, monetary-setting source currencies, and all four display choices.
+- Missing required FX yields `null`, never a relabelled native value. Any missing constituent makes the relevant aggregate and portfolio weights unavailable.
+
+`GET /portfolio/settings` returns `display_currency`, `display_currency_options`, source-aware
+`cash` and `realized_gains_ytd_override` objects (each including `display_amount`),
+`realized_gains_ytd_from_disposals_display`, `realized_gains_ytd_display`, profiles, and calendar year.
+`PUT /portfolio/settings` is partial: it accepts `display_currency`, accepts or clears either money
+object, and preserves every omitted money/profile field.
+
+Live read models use currency-neutral names: holdings expose `cost_display`,
+`market_value_display`, `pnl_display`, and `fx_to_display`; the holdings response exposes
+`portfolio_market_value_display`; Tracker exposes `price_display`. Each response states
+`display_currency`. Native quote/acquisition fields and raw fundamentals are unchanged.
 
 ### Holding
 
@@ -81,6 +95,24 @@ Cost rule: `lot_cost = quantity × unit_price + commission`. See `decisions/0007
 
 Cached so the UI can still render when APIs flake.
 
+### HistoricalSeries / HistoricalPoint
+
+Chart-only adjusted history (`0026`), stored separately from `price_bars`.
+
+| Field (logical) | Notes |
+| --- | --- |
+| series identity | Stable instrument or regional-benchmark key |
+| association | Exactly one Instrument or benchmark region (`eu` / `us`) |
+| symbol / native_currency | Provider listing and currency; no historical FX conversion |
+| source / resolution | Yahoo adjusted closes; compact mixed-resolution series |
+| earliest_date / as_of / updated_at | Coverage and freshness metadata |
+| points | Date, positive adjusted close, and `daily` / `weekly` / `monthly` resolution |
+
+The complete provider history is validated, deduplicated, and compacted on every accepted weekly
+refresh so revised split/distribution adjustments propagate. The current cache wins over a failed,
+truncated, or otherwise inferior response. Benchmarks are SPY (US) and EXSA.DE (Europe), cached
+once per region and tracked independently.
+
 ### NewsItem
 
 | Field (logical) | Notes |
@@ -107,10 +139,11 @@ Provider payloads are never merged field by field.
 
 ### Ingestion state
 
-Per Instrument × operation (`quote`, `bars`, `fundamentals`, `technicals`, `news`):
+Per Instrument × operation (`quote`, `bars`, `long_history`, `fundamentals`, `technicals`, `news`):
 cadence, attempt count, last attempt/success, selected source, coverage score, missing fields,
 gap streak, next due time, and optional input fingerprint. Provider rate state separately
 persists window counters, last call, cooldown, and observed limit/remaining/reset headers.
+Regional benchmark refresh state is separate because it is shared rather than instrument-owned.
 
 ### AgentRun
 
@@ -141,8 +174,10 @@ persists window counters, last call, cooldown, and observed limit/remaining/rese
 | suppressed / suppressed_reason | Vestigial. `0018` removed suppression entirely; nothing writes these any more |
 | rationale | Claude research text relevant to this instrument (not a Claude-chosen action) |
 | jev_payload | Combined-lens decision + confidence (primary) |
-| jev_lenses | Supporting lens answers: `thesis`, `news`, `technicals`, and optionally echoed `combined`. Both books carry all four since `0022`; `prices` remains replaced by `thesis` |
+| jev_lenses | Supporting lens answers: `historical`, `fundamentals`, `technicals`, `news`, and `combined` for both books (`0027`). Earlier runs carry `thesis` in place of `fundamentals`/`historical` (`0013`, `0022`) and stay readable |
 | conversation | Per-instrument Claude↔Jev transcript for this run (turns: researcher requests + decider answers, including scenario rounds) — source for UI log icon |
+| explanation | `0028`: Claude's plain-language why, JSON `{text, tension, market_read}` — the same on every horizon row of the subject. Explains the combined decision, never changes it. Null when the explain step was skipped or failed. Copied on carry-forward |
+| carried_from_run_id | `0027`: set when the subject had no material change and this row was copied from the run that actually decided it. Null on a fresh decision. Carried rows never alert |
 | timestamps | Created / updated |
 
 Ticker-level recommendations, informed by full book context when agents run. Displayed action always comes from the combined Jev lens; other lenses and the conversation are evidence/transparency.
@@ -180,7 +215,7 @@ Fundamentals → Instrument (one current normalized snapshot)
 Worker → Claude / Jev (and similar) calls **should include** whatever portfolio facts improve advice:
 
 - Tickers / ISINs, kind, venue
-- Holdings: quantities, avg cost, weights / concentration, P&L, EUR notionals / totals as needed
+- Holdings: quantities, avg cost, weights / concentration, P&L, and notionals / totals in the run's display currency as needed
 - Public OHLCV summaries, fundamentals, technical features, news snippets
 
 Still true:
@@ -189,20 +224,34 @@ Still true:
 - Do not log or mirror the full book to unrelated third parties beyond the configured agent/LLM/decision providers
 
 The context blob (`AgentRun.context`, built by `worker/advisory.py::_build_context`) is now a
-stable, exposed API field. Top level: `display_currency`, `portfolio_market_value_eur`,
-`portfolio_cost_eur`, `cash_eur`, `portfolio_total_eur`, `realized_gains_ytd_eur`,
+stable, exposed API field. New runs use top-level `display_currency`, `portfolio_market_value_display`,
+`portfolio_cost_display`, `cash_display`, `portfolio_total_display`, `realized_gains_ytd_display`,
 `calendar_year`, `tracker` (compact symbol/name list, renamed from `watchlist` in `0019`),
 `profiles` (`investor` / `portfolio`, raw — null where unwritten), `mandates` (the resolved text
 per book, defaults substituted — what was actually sent), `mandate` (the composed holdings text,
 kept for the log page and back-compat), `holdings` (per-instrument quantity/cost/market
 value/P&L/weights, `quote`, `fundamentals`, `technicals`, `news`, approved `thesis`), `tracked` (per tracked
-name: `book`, `symbol`, `name`, `added_at`, `quote`, `price_eur`,
+name: `book`, `symbol`, `name`, `added_at`, `quote`, `price_display`,
 `fundamentals`, `technicals`, and `news` — but no position fields),
-`built_at`. It is written before Claude's research pass runs and carries no Claude-authored text.
+`built_at`. Holding values likewise use `cost_display`, `market_value_display`, and `pnl_display`.
+It is written before Claude's research pass runs and carries no Claude-authored text. Historical
+contexts retain their original EUR keys and `display_currency`; readers support both shapes without
+rewriting stored history.
+
+AgentRun `research` (`research_json`) carries `synthesis`, `by_symbol`, `thesis_by_symbol`,
+`tracked_by_symbol`, `market_read` and `explanations` (per symbol `{text, tension}`, `0028`), `layer_notes` (per symbol, one ≤20-word note per evidence lens), `materiality`
+(per instrument id, the triggers that re-decided it; empty = carried), and `cards` (`0027`): per
+instrument id, the decision record `{schema, symbol, book, decided_run_id, decided_at, mandate_hash,
+book_fp, cards, notes, status}` — the layer cards the subject was last decided on. A carried subject
+repeats its deciding run's record, so materiality always compares against the real decision. The
+run context also stores each subject's `cards`, `decide_ids`, and `fingerprints`. Model refs carry a
+`token_budget` (`decided`, `carried`, Claude CLI usage for `claude_research` and `claude_explain`, Jev
+request characters per lens). The run context also holds `market`: the regional proxy card per region in
+use (`0028`).
 
 `conversation` turns (`worker/advisory.py::_run_lens` / `_run_scenario_round`) have `role`
 (`researcher` \| `decider` \| `system`) and `kind` (`lens_request` \| `lens_answer` \|
-`scenario_request` \| `scenario_answer` \| `error`), plus `lens`/`round`/`at`/`summary`/
+`scenario_request` \| `scenario_answer` \| `error` \| `carried` \| `explanation`), plus `lens`/`round`/`at`/`summary`/
 `hypothesis`/`question_hint` and, for answer turns, `answers: { "<horizon>": { action, payload } }`
 where `payload` is Jev's raw per-question answer passed through verbatim (at minimum `choice`
 and `confidence`; further keys are Jev/TypeSafe-defined and not enumerated here).

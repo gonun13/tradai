@@ -8,12 +8,12 @@ from urllib.request import Request, urlopen
 
 import doctrine
 
-# 0013: `prices` replaced by `thesis`. The prices lens judged on quote and P&L alone,
-# which is exactly the reasoning the operator rejects as grounds for a sell. Swapping
-# rather than adding keeps the call count (and token cost) unchanged.
-LENSES = ("thesis", "news", "technicals", "combined")
+# 0027: lenses follow the ingestion layers. The 0013 `thesis` lens folded into
+# `fundamentals` (the business case); `historical` is the long-run record. `combined`
+# runs last and sees the other four verdicts.
+LENSES = ("historical", "fundamentals", "technicals", "news", "combined")
 
-# 0022: tracked names receive instrument-linked news and the same four lenses.
+# 0022: tracked names receive instrument-linked news and the same lenses.
 TRACKER_LENSES = LENSES
 
 PORTFOLIO_CRITERIA: dict[str, str] = {
@@ -51,36 +51,70 @@ TRACKER_CRITERIA: dict[str, str] = {
 }
 
 
+# 0027: questions carry only these short labels; the full definitions above travel once
+# per call in `state.guidance`. Same keys, so `doctrine.split_choice` is unaffected.
+PORTFOLIO_CRITERIA_SHORT: dict[str, str] = {
+    "buy_thesis_intact_underweight": "add: thesis holds, underweight",
+    "buy_new_conviction": "add: new evidence",
+    "sell_thesis_broken": "sell: falsifier tripped",
+    "sell_better_use": "sell: better named use",
+    "hold": "keep size",
+    "watch": "monitor",
+}
+
+TRACKER_CRITERIA_SHORT: dict[str, str] = {
+    "buy_now": "start now",
+    "wait_better_entry": "wait for entry",
+    "keep_watching": "keep looking",
+    "drop_lost_interest": "stop tracking",
+}
+
+
 def _lens_focus(lens: str, book: str) -> str:
     if book == "tracker":
         return {
-            # There is no thesis of record for a name that was never bought, so the `thesis`
-            # lens asks the entry question instead — same slot, mirrored question.
-            "thesis": (
-                "Use the researcher's entry case and what would have to be true to buy — "
-                "ignore price level and technicals. The question is whether the reason to "
-                "want this holds up."
+            "historical": (
+                "Use the long-run record only (multi-year returns, drawdowns, volatility, "
+                "52-week range, excess return vs the regional proxy) and Claude's historical "
+                "note. The question is whether today's price is a reasonable entry against "
+                "this name's own history."
+            ),
+            # There is no thesis of record for a name that was never bought, so the
+            # fundamentals lens asks the entry question — the business case for owning it.
+            "fundamentals": (
+                "Use the fundamentals, the researcher's entry case and what would have to be "
+                "true to buy — ignore price level and technicals. The question is whether the "
+                "reason to want this holds up."
             ),
             "technicals": (
-                "Use RSI/SMA/returns and Claude technical notes only — ignore the entry case. "
+                "Use RSI/SMA/returns and Claude's technical note only — ignore the entry case. "
                 "The question is whether this is a sensible price and moment to start."
             ),
+            "news": (
+                "Use the recent headlines and Claude's news note only — ignore price levels and "
+                "technicals. The question is whether the news changes the case for starting."
+            ),
             "combined": (
-                "Weigh the entry case and the technicals together with the operator's cash "
+                "Weigh the four lens verdicts and layer notes together with the operator's cash "
                 "reserve and what they already own, and say whether to start a position."
             ),
         }.get(lens, "Use all available evidence.")
 
     return {
-        "thesis": (
-            "Use the recorded investment thesis, its falsifiers, and the researcher's "
-            "thesis_status and evidence only — ignore price level, P&L and technicals. "
-            "The question is whether the reason for owning this still holds."
+        "historical": (
+            "Use the long-run record only (multi-year returns, drawdowns, volatility, 52-week "
+            "range, excess return vs the regional proxy) and Claude's historical note. It is "
+            "context for the thesis — a poor record is never by itself a reason to sell."
         ),
-        "news": "Use recent headlines/snippets and Claude news notes only — ignore price levels and technicals.",
-        "technicals": "Use RSI/SMA/returns and Claude technical notes only — ignore news headlines.",
+        "fundamentals": (
+            "Use the fundamentals, the recorded thesis, its falsifiers, and the researcher's "
+            "thesis_status and evidence only — ignore price level, P&L and technicals. The "
+            "question is whether the reason for owning this still holds."
+        ),
+        "news": "Use recent headlines and Claude's news note only — ignore price levels and technicals.",
+        "technicals": "Use RSI/SMA/returns and Claude's technical note only — ignore news headlines.",
         "combined": (
-            "Weigh thesis, news, and technicals together with full book context "
+            "Weigh the four lens verdicts and layer notes together with full book context "
             "(sizes, costs, held_days, concentration, cash) for the best overall advisory action."
         ),
     }.get(lens, "Use all available evidence.")
@@ -116,6 +150,7 @@ class JevAdapter:
         self.url = f"{base}/v1/systemone"
         self.model = os.environ.get("TYPESAFE_MODEL", "jev-latest")
         self.timeout = int(os.environ.get("TYPESAFE_TIMEOUT_SECONDS", "60"))
+        self.last_request_chars = 0
 
     def enabled(self) -> bool:
         return bool(self.api_key)
@@ -164,9 +199,35 @@ class JevAdapter:
             raise JevError("Jev returned unexpected payload")
         return data
 
+    def guidance(
+        self,
+        *,
+        lens: str,
+        books: set[str],
+        mandates: dict[str, str] | None = None,
+        extra_instructions: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Everything every question in this call shares, stated once (0027). The per-question
+        text used to repeat all of this 168 times a run. A question names `SYM horizon (book)`;
+        its book's entry here says how to answer it.
+        """
+        mandates = mandates or {}
+        out: dict[str, Any] = {"lens": lens, "by_book": {}}
+        for book in sorted(books):
+            out["by_book"][book] = {
+                "mandate": mandates.get(book) or doctrine.DEFAULT_MANDATE,
+                "lens_focus": _lens_focus(lens, book),
+                "book_guidance": _book_guidance(book),
+                "choices": TRACKER_CRITERIA if book == "tracker" else PORTFOLIO_CRITERIA,
+            }
+        if extra_instructions:
+            out["scenario_focus"] = extra_instructions
+        return out
+
     def choose_actions(
         self,
-        state: str | dict[str, Any],
+        state: dict[str, Any],
         instrument_keys: list[tuple[str, str, int, str]],
         *,
         lens: str = "combined",
@@ -176,37 +237,33 @@ class JevAdapter:
         """
         instrument_keys: list of (question_id, symbol, instrument_id, book)
 
-        Both books ride in one call (0019). System One takes per-question criteria, so a
-        tracked name can be offered a different choice set and a different mandate without
-        costing a second round trip.
+        Both books ride in one call (0019). The mandate, lens focus, book guidance and full
+        choice definitions go once into `state.guidance`; each question names only its
+        subject, horizon and book, with short labels on the same composite keys (0027).
 
         Returns raw System One response plus a flattened map question_id -> answer.
         """
-        mandates = mandates or {}
+        books = {book for _qid, _sym, _iid, book in instrument_keys}
+        state = dict(state)
+        state["guidance"] = self.guidance(
+            lens=lens, books=books, mandates=mandates, extra_instructions=extra_instructions
+        )
 
         questions: dict[str, Any] = {}
         for qid, symbol, _iid, book in instrument_keys:
             horizon = qid.rsplit("_", 1)[-1]
-            mandate = mandates.get(book) or doctrine.DEFAULT_MANDATE
-            instructions = (
-                f"MANDATE: {mandate} "
-                f"Lens={lens}. {_lens_focus(lens, book)} "
-                f"For listed instrument {symbol}, choose one advisory action over a {horizon} horizon. "
-                f"{_book_guidance(book)}"
-            )
-            if extra_instructions:
-                instructions = f"{instructions} Scenario focus: {extra_instructions}"
             questions[qid] = {
                 "type": "choice",
-                "instructions": instructions,
+                "instructions": f"{symbol} {horizon} ({book})",
                 # The choice set carries the reason, so a bare "sell" is unrepresentable.
-                "criteria": TRACKER_CRITERIA if book == "tracker" else PORTFOLIO_CRITERIA,
+                "criteria": TRACKER_CRITERIA_SHORT if book == "tracker" else PORTFOLIO_CRITERIA_SHORT,
             }
 
+        self.last_request_chars = len(json.dumps({"state": state, "questions": questions}))
         raw = self.system_one(state, questions)
         answers = raw.get("answers") or {}
         flattened: dict[str, Any] = {}
         if isinstance(answers, dict):
             for qid, ans in answers.items():
                 flattened[qid] = ans
-        return {"raw": raw, "answers": flattened, "lens": lens}
+        return {"raw": raw, "answers": flattened, "lens": lens, "request_chars": self.last_request_chars}

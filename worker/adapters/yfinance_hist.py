@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import requests
 
-from adapters import Bar, Quote
+from adapters import Bar, HistoricalPoint, LongHistory, Quote
 from adapters.base import AdapterMetadata, RatePolicy
 from adapters.errors import AdapterRateLimitError, SymbolNotFoundError
 
@@ -30,7 +30,7 @@ class YFinanceHistoricalAdapter:
             provider=self.name,
             regions=frozenset(self.regions),
             instrument_kinds=frozenset({"equity", "etf"}),
-            operations=frozenset({"quote", "bars"}),
+            operations=frozenset({"quote", "bars", "long_history"}),
             enabled=True,
             rate_policy=RatePolicy(minimum_interval_seconds=0.25),
         )
@@ -82,6 +82,34 @@ class YFinanceHistoricalAdapter:
                 )
             )
         return bars
+
+    def get_long_history(self, symbol: str, currency: str) -> LongHistory:
+        """Return Yahoo's complete adjusted-close history before local compaction."""
+        payload = self._chart(symbol, range_="max", interval="1d")
+        result = (payload.get("chart") or {}).get("result") or []
+        if not result:
+            return LongHistory([], currency.upper(), None)
+        node = result[0]
+        timestamps = node.get("timestamp") or []
+        adjusted = ((node.get("indicators") or {}).get("adjclose") or [{}])[0]
+        closes = adjusted.get("adjclose") or []
+        points: list[HistoricalPoint] = []
+        for i, ts in enumerate(timestamps):
+            close = closes[i] if i < len(closes) else None
+            value = self._f(close)
+            if value is None or value <= 0:
+                continue
+            points.append(HistoricalPoint(
+                point_date=datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%Y-%m-%d"),
+                adjusted_close=value,
+            ))
+        meta = node.get("meta") or {}
+        native_currency = str(meta.get("currency") or currency or "EUR").upper()
+        return LongHistory(
+            points=points,
+            currency=native_currency,
+            as_of=points[-1].point_date if points else None,
+        )
 
     def _chart_meta(self, symbol: str, range_: str) -> dict:
         payload = self._chart(symbol, range_=range_, interval="1d")

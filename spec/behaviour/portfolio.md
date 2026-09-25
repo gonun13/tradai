@@ -28,7 +28,7 @@ Local holdings management for European and US listed equities and ETFs. Slim API
 
 ### Read models
 
-- Dashboard loads holdings joined with latest quotes when available; **values and totals in EUR**.
+- Dashboard loads holdings joined with latest quotes when available; converted values and totals use the selected display currency (`0025`). Native acquisition and quote figures retain their own currencies. Missing FX shows **pending FX** and makes aggregates unavailable.
 - Each holding exposes daily percentage change as the latest quote versus the most recent stored
   daily close before that quote's calendar date; it is unavailable when either value is missing.
 - Missing quotes are tolerable (show holding with stale / empty quote state).

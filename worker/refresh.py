@@ -26,18 +26,22 @@ from ingestion import (
     cache_wins,
     evaluate_bars,
     evaluate_fundamentals,
+    evaluate_long_history,
     evaluate_news,
     evaluate_quote,
     evaluate_technicals,
+    long_history_cache_wins,
 )
 from technicals import BarClose
 
 QUOTE_CADENCE = 15 * 60
 BARS_CADENCE = 24 * 60 * 60
+LONG_HISTORY_CADENCE = 7 * 24 * 60 * 60
 NEWS_CADENCE = 24 * 60 * 60
 FUNDAMENTALS_CADENCE = 7 * 24 * 60 * 60
 FUNDAMENTALS_GAP_CADENCE = 24 * 60 * 60
 FX_CADENCE = 12 * 60 * 60
+DISPLAY_CURRENCIES = {"EUR", "USD", "GBP", "CHF"}
 
 
 def resolve_region(symbol: str, region: str | None) -> str:
@@ -84,9 +88,37 @@ class MarketRefreshService:
                 bar_date TEXT NOT NULL, open REAL, high REAL, low REAL, close REAL NOT NULL,
                 volume REAL, source TEXT NOT NULL, UNIQUE (instrument_id, bar_date)
             );
+            CREATE TABLE IF NOT EXISTS historical_series (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                series_key TEXT NOT NULL UNIQUE,
+                series_kind TEXT NOT NULL CHECK (series_kind IN ('instrument', 'benchmark')),
+                instrument_id INTEGER,
+                benchmark_region TEXT CHECK (benchmark_region IS NULL OR benchmark_region IN ('eu', 'us')),
+                symbol TEXT NOT NULL, native_currency TEXT NOT NULL, source TEXT NOT NULL,
+                resolution TEXT NOT NULL, earliest_date TEXT NOT NULL, as_of TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (instrument_id) REFERENCES instruments(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS historical_points (
+                series_id INTEGER NOT NULL, point_date TEXT NOT NULL,
+                adjusted_close REAL NOT NULL, resolution TEXT NOT NULL,
+                PRIMARY KEY (series_id, point_date),
+                FOREIGN KEY (series_id) REFERENCES historical_series(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_historical_points_date
+                ON historical_points (series_id, point_date);
+            CREATE TABLE IF NOT EXISTS benchmark_history_state (
+                region TEXT PRIMARY KEY CHECK (region IN ('eu', 'us')),
+                symbol TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+                last_attempt_at TEXT, last_success_at TEXT, next_due_at TEXT,
+                last_error TEXT, updated_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS fx_rates (
                 base_currency TEXT PRIMARY KEY, quote_currency TEXT NOT NULL, rate REAL NOT NULL,
                 as_of TEXT NOT NULL, source TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY, value TEXT, updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS news_items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, external_id TEXT NOT NULL UNIQUE,
@@ -158,7 +190,7 @@ class MarketRefreshService:
         now_iso = now.isoformat()
         ingested: dict[str, set[int]] = {
             operation: set()
-            for operation in ("quote", "bars", "fundamentals", "technicals", "news")
+            for operation in ("quote", "bars", "long_history", "fundamentals", "technicals", "news")
         }
         results: dict[str, Any] = {
             "ok": True,
@@ -174,6 +206,7 @@ class MarketRefreshService:
             "ibkr_stub": not self.ibkr.enabled(),
             "ibkr_routed": False,
             "marketaux_enabled": self.marketaux.enabled(),
+            "benchmark_history": {},
         }
         with self.connect() as conn:
             instruments = self._instruments(conn)
@@ -205,6 +238,17 @@ class MarketRefreshService:
                         ingested["bars"].add(int(inst["id"]))
                     if changed:
                         changed_bars.add(int(inst["id"]))
+
+            for inst in self._oldest_first(conn, instruments, "long_history"):
+                iid = int(inst["id"])
+                if self._due(conn, iid, "long_history", now):
+                    if self._refresh_long_history(
+                        conn, limiter, inst, item_by_id[iid], results, now
+                    ):
+                        ingested["long_history"].add(iid)
+
+            for region in sorted({resolve_region(i["symbol"], i["region"]) for i in instruments}):
+                self._refresh_benchmark_history(conn, limiter, region, results, now)
 
             for inst in self._oldest_first(conn, instruments, "fundamentals"):
                 iid = int(inst["id"])
@@ -271,6 +315,12 @@ class MarketRefreshService:
 
     def _historical_registry(self, region: str) -> list[Any]:
         return [self.finnhub, self.yfinance] if region == "us" else [self.yfinance]
+
+    def _long_history_registry(self, region: str) -> list[Any]:
+        # Adjusted close (splits + distributions) is an explicit Yahoo contract here.
+        # Reuse the historical extension point so deterministic test registries remain isolated;
+        # unsupported adapters (Finnhub in production) are classified without being called.
+        return self._historical_registry(region)
 
     def _fundamentals_registry(self, region: str, kind: str) -> list[Any]:
         if kind == "etf":
@@ -410,6 +460,166 @@ class MarketRefreshService:
             self._record_state(conn, iid, "bars", BARS_CADENCE, selection, False, now)
         self._report_attempts(symbol, "bars", selection, results)
         return accepted, changed
+
+    def _refresh_long_history(
+        self, conn: sqlite3.Connection, limiter: PersistentRateLimiter, inst: sqlite3.Row,
+        item: dict[str, Any], results: dict[str, Any], now: datetime,
+    ) -> bool:
+        iid, symbol = int(inst["id"]), str(inst["symbol"])
+        region, kind = resolve_region(symbol, inst["region"]), str(inst["kind"] or "equity")
+        selection = self._select(
+            conn, limiter, self._long_history_registry(region), operation="long_history",
+            region=region, kind=kind,
+            invoke=lambda adapter: adapter.get_long_history(symbol, inst["currency"] or "EUR"),
+            evaluate=evaluate_long_history,
+        )
+        existing = self._history_series(conn, f"instrument:{iid}")
+        candidate = selection.selected
+        accepted = False
+        if candidate and candidate.complete and not long_history_cache_wins(
+            str(existing["earliest_date"]) if existing else None,
+            str(existing["as_of"]) if existing else None,
+            candidate,
+        ):
+            history = candidate.payload
+            self._replace_history_series(
+                conn, series_key=f"instrument:{iid}", series_kind="instrument",
+                instrument_id=iid, benchmark_region=None, symbol=symbol,
+                currency=history.currency or str(inst["currency"] or "EUR"),
+                source=candidate.provider, points=history.points, now=now,
+            )
+            accepted = True
+            item.update({
+                "long_history": len(history.points),
+                "long_history_source": candidate.provider,
+            })
+        elif existing:
+            count = int(conn.execute(
+                "SELECT COUNT(*) FROM historical_points WHERE series_id=?", (existing["id"],)
+            ).fetchone()[0])
+            item.update({
+                "long_history": count,
+                "long_history_source": existing["source"],
+                "long_history_from_cache": True,
+            })
+            if candidate:
+                self._event("retained_cache", symbol=symbol, operation="long_history",
+                            candidate_source=candidate.provider)
+        self._record_state(
+            conn, iid, "long_history",
+            LONG_HISTORY_CADENCE if accepted or existing else 0,
+            selection, accepted, now
+        )
+        self._report_attempts(symbol, "long_history", selection, results)
+        return accepted
+
+    def _refresh_benchmark_history(
+        self, conn: sqlite3.Connection, limiter: PersistentRateLimiter, region: str,
+        results: dict[str, Any], now: datetime,
+    ) -> None:
+        symbol, currency = ("SPY", "USD") if region == "us" else ("EXSA.DE", "EUR")
+        existing = self._history_series(conn, f"benchmark:{region}")
+        state = conn.execute(
+            "SELECT * FROM benchmark_history_state WHERE region=?", (region,)
+        ).fetchone()
+        if state and state["next_due_at"] and not self._time_due_at(state["next_due_at"], now):
+            results["benchmark_history"][region] = {
+                "symbol": symbol, "status": "from_cache", "source": existing["source"] if existing else None,
+                "as_of": existing["as_of"] if existing else None,
+            }
+            return
+
+        selection = self._select(
+            conn, limiter, self._long_history_registry(region), operation="long_history",
+            region=region, kind="etf",
+            invoke=lambda adapter: adapter.get_long_history(symbol, currency),
+            evaluate=evaluate_long_history,
+        )
+        candidate = selection.selected
+        accepted = False
+        error = None
+        if candidate and candidate.complete and not long_history_cache_wins(
+            str(existing["earliest_date"]) if existing else None,
+            str(existing["as_of"]) if existing else None,
+            candidate,
+        ):
+            history = candidate.payload
+            self._replace_history_series(
+                conn, series_key=f"benchmark:{region}", series_kind="benchmark",
+                instrument_id=None, benchmark_region=region, symbol=symbol,
+                currency=history.currency or currency, source=candidate.provider,
+                points=history.points, now=now,
+            )
+            accepted = True
+            existing = self._history_series(conn, f"benchmark:{region}")
+        elif not candidate or not candidate.complete:
+            details = [a.detail or a.status for a in selection.attempts if a.status != "complete"]
+            error = "; ".join(details) or "no complete adjusted history"
+        elif existing:
+            error = "provider response had inferior coverage; retained cache"
+
+        next_due = now + timedelta(seconds=LONG_HISTORY_CADENCE if existing else 0)
+        conn.execute(
+            """
+            INSERT INTO benchmark_history_state
+                (region,symbol,attempts,last_attempt_at,last_success_at,next_due_at,last_error,updated_at)
+            VALUES (?,?,1,?,?,?,?,?)
+            ON CONFLICT(region) DO UPDATE SET symbol=excluded.symbol,
+                attempts=benchmark_history_state.attempts+1,
+                last_attempt_at=excluded.last_attempt_at,
+                last_success_at=COALESCE(excluded.last_success_at,benchmark_history_state.last_success_at),
+                next_due_at=excluded.next_due_at,last_error=excluded.last_error,
+                updated_at=excluded.updated_at
+            """,
+            (region, symbol, now.isoformat(), now.isoformat() if accepted else None,
+             next_due.isoformat(), error, now.isoformat()),
+        )
+        status = "ingested" if accepted else ("retained_cache" if existing else "failed")
+        results["benchmark_history"][region] = {
+            "symbol": symbol, "status": status,
+            "source": existing["source"] if existing else None,
+            "as_of": existing["as_of"] if existing else None,
+            "error": error,
+        }
+
+    @staticmethod
+    def _history_series(conn: sqlite3.Connection, series_key: str) -> sqlite3.Row | None:
+        return conn.execute(
+            "SELECT * FROM historical_series WHERE series_key=?", (series_key,)
+        ).fetchone()
+
+    @staticmethod
+    def _replace_history_series(
+        conn: sqlite3.Connection, *, series_key: str, series_kind: str,
+        instrument_id: int | None, benchmark_region: str | None, symbol: str,
+        currency: str, source: str, points: list[Any], now: datetime,
+    ) -> None:
+        earliest, as_of = points[0].point_date, points[-1].point_date
+        conn.execute(
+            """
+            INSERT INTO historical_series
+                (series_key,series_kind,instrument_id,benchmark_region,symbol,native_currency,
+                 source,resolution,earliest_date,as_of,updated_at)
+            VALUES (?,?,?,?,?,?,?,'compact',?,?,?)
+            ON CONFLICT(series_key) DO UPDATE SET series_kind=excluded.series_kind,
+                instrument_id=excluded.instrument_id,benchmark_region=excluded.benchmark_region,
+                symbol=excluded.symbol,native_currency=excluded.native_currency,
+                source=excluded.source,resolution=excluded.resolution,
+                earliest_date=excluded.earliest_date,as_of=excluded.as_of,
+                updated_at=excluded.updated_at
+            """,
+            (series_key, series_kind, instrument_id, benchmark_region, symbol,
+             currency.upper(), source, earliest, as_of, now.isoformat()),
+        )
+        series_id = int(conn.execute(
+            "SELECT id FROM historical_series WHERE series_key=?", (series_key,)
+        ).fetchone()[0])
+        conn.execute("DELETE FROM historical_points WHERE series_id=?", (series_id,))
+        conn.executemany(
+            "INSERT INTO historical_points (series_id,point_date,adjusted_close,resolution) "
+            "VALUES (?,?,?,?)",
+            [(series_id, p.point_date, p.adjusted_close, p.resolution) for p in points],
+        )
 
     def _refresh_fundamentals(
         self, conn: sqlite3.Connection, limiter: PersistentRateLimiter,
@@ -603,6 +813,13 @@ class MarketRefreshService:
                 int(row[0])
                 for row in conn.execute("SELECT DISTINCT instrument_id FROM price_bars")
             },
+            "long_history": {
+                int(row[0])
+                for row in conn.execute(
+                    "SELECT instrument_id FROM historical_series "
+                    "WHERE series_kind='instrument' AND instrument_id IS NOT NULL"
+                )
+            },
             "fundamentals": {
                 int(row[0]) for row in conn.execute("SELECT instrument_id FROM fundamentals")
             },
@@ -628,7 +845,7 @@ class MarketRefreshService:
 
         operations = {
             operation: operation_counts(operation)
-            for operation in ("quote", "bars", "fundamentals", "technicals", "news")
+            for operation in ("quote", "bars", "long_history", "fundamentals", "technicals", "news")
         }
 
         def layer_counts(*operation_names: str) -> dict[str, int]:
@@ -638,10 +855,11 @@ class MarketRefreshService:
             }
 
         historical: dict[str, Any] = {
-            **layer_counts("quote", "bars"),
+            **layer_counts("quote", "bars", "long_history"),
             "operations": {
                 "quote": operations["quote"],
                 "bars": operations["bars"],
+                "long_history": operations["long_history"],
             },
         }
         return {
@@ -658,7 +876,17 @@ class MarketRefreshService:
         self, conn: sqlite3.Connection, instruments: list[sqlite3.Row],
         results: dict[str, Any], now: datetime,
     ) -> None:
-        currencies = {"EUR"} | {str(inst["currency"] or "EUR").upper() for inst in instruments}
+        currencies = DISPLAY_CURRENCIES | {
+            str(inst["currency"] or "EUR").upper() for inst in instruments
+        }
+        currencies.update(
+            str(row["currency"] or "EUR").upper()
+            for row in conn.execute("SELECT DISTINCT currency FROM quotes").fetchall()
+        )
+        for key in ("cash_currency", "realized_gains_ytd_override_currency"):
+            row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+            if row and row["value"]:
+                currencies.add(str(row["value"]).upper())
         for currency in sorted(currencies):
             row = conn.execute(
                 "SELECT updated_at FROM fx_rates WHERE base_currency=?", (currency,)
@@ -836,5 +1064,12 @@ class MarketRefreshService:
         try:
             then = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
             return (now - then).total_seconds() >= cadence
+        except ValueError:
+            return True
+
+    @staticmethod
+    def _time_due_at(value: str, now: datetime) -> bool:
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00")) <= now
         except ValueError:
             return True

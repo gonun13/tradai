@@ -63,9 +63,11 @@ final class AgentRepository
         }
 
         $stmt = $this->db->prepare(<<<'SQL'
-            SELECT r.*, i.symbol, i.name AS instrument_name, i.kind, i.region, i.currency
+            SELECT r.*, i.symbol, i.name AS instrument_name, i.kind, i.region, i.currency,
+                   c.started_at AS carried_from_at
             FROM recommendations r
             INNER JOIN instruments i ON i.id = r.instrument_id
+            LEFT JOIN agent_runs c ON c.id = r.carried_from_run_id
             WHERE r.agent_run_id = :run_id
             ORDER BY i.symbol COLLATE NOCASE ASC,
                      CASE r.horizon WHEN '1m' THEN 0 WHEN '3m' THEN 1 WHEN '6m' THEN 2
@@ -138,6 +140,16 @@ final class AgentRepository
             $conversation = is_array($decoded) ? $decoded : null;
         }
 
+        $explanation = null;
+        if (!empty($row['explanation'])) {
+            $decoded = json_decode((string) $row['explanation'], true);
+            $explanation = is_array($decoded) && !empty($decoded['text']) ? [
+                'text' => (string) $decoded['text'],
+                'tension' => isset($decoded['tension']) ? (string) $decoded['tension'] : null,
+                'market_read' => isset($decoded['market_read']) ? (string) $decoded['market_read'] : null,
+            ] : null;
+        }
+
         return [
             'id' => (int) $row['id'],
             'agent_run_id' => (int) $row['agent_run_id'],
@@ -168,6 +180,13 @@ final class AgentRepository
             'jev' => $jev,
             'jev_lenses' => $lenses,
             'conversation' => $conversation,
+            // 0027: set when an unchanged subject was carried forward from an earlier decision.
+            'carried_from_run_id' => isset($row['carried_from_run_id']) && $row['carried_from_run_id'] !== null
+                ? (int) $row['carried_from_run_id']
+                : null,
+            'carried_from_at' => $row['carried_from_at'] ?? null,
+            // 0028: Claude's why — explains the combined decision, never changes it.
+            'explanation' => $explanation,
             'created_at' => $row['created_at'],
             'updated_at' => $row['updated_at'],
         ];

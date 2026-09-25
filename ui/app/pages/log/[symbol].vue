@@ -7,6 +7,7 @@ definePageMeta({
 
 const route = useRoute()
 const api = useHoldingsApi()
+const { moneyOrDash } = useFormat()
 const { message: opsMessage, error: opsError } = useGlobalOps()
 
 const symbol = computed(() => {
@@ -43,12 +44,12 @@ function lensLine(recsList: Recommendation[]) {
     return null
   }
   // Internal signal names only — the thesis reasoning behind them stays off-screen.
-  const display: Record<string, string> = { thesis: 'fundamentals', news: 'news', technicals: 'technicals' }
+  // 0027: runs before it stored `thesis` where `fundamentals` now sits.
   const parts: string[] = []
-  for (const key of ['thesis', 'news', 'technicals'] as const) {
-    const a = lenses[key]?.action
+  for (const key of ['historical', 'fundamentals', 'technicals', 'news'] as const) {
+    const a = (lenses[key] ?? (key === 'fundamentals' ? lenses.thesis : undefined))?.action
     if (a) {
-      parts.push(`${display[key]}:${a}`)
+      parts.push(`${key}:${a}`)
     }
   }
   return parts.length ? parts.join(' · ') : null
@@ -77,6 +78,14 @@ const contextTracked = computed(() => {
   const tracked = data.value?.run?.context?.tracked ?? []
   return tracked.find((t) => t.symbol === symbol.value) ?? null
 })
+
+const runCurrency = computed(() => data.value?.run?.context?.display_currency ?? 'EUR')
+const trackedDisplayPrice = computed(() =>
+  contextTracked.value?.price_display ?? contextTracked.value?.price_eur ?? null,
+)
+const holdingDisplayValue = computed(() =>
+  contextHolding.value?.market_value_display ?? contextHolding.value?.market_value_eur ?? null,
+)
 
 const resolvedBook = computed<'portfolio' | 'tracker'>(() => {
   const recommendationBook = primary.value?.book
@@ -168,6 +177,27 @@ watch(
           </span>
         </p>
         <p v-if="lensLine(recs)" class="sub lenses">supporting {{ lensLine(recs) }}</p>
+        <p v-if="primary.carried_from_run_id" class="sub">
+          Unchanged since run #{{ primary.carried_from_run_id }}<template v-if="primary.carried_from_at">
+          ({{ primary.carried_from_at.slice(0, 10) }})</template> — carried forward without a new
+          Claude/Jev pass; the conversation below is from that run.
+        </p>
+      </section>
+
+      <section v-if="primary.explanation" class="panel" aria-label="Why this recommendation">
+        <h1>Why</h1>
+        <p class="mute">
+          Claude's explanation of the combined decision<template v-if="primary.carried_from_run_id">,
+          written when run #{{ primary.carried_from_run_id }} decided it</template>. It explains the
+          action; it never changes it.
+        </p>
+        <p class="rationale">{{ primary.explanation.text }}</p>
+        <p v-if="primary.explanation.tension" class="rationale">
+          <strong>Tension:</strong> {{ primary.explanation.tension }}
+        </p>
+        <p v-if="primary.explanation.market_read" class="sub">
+          Market read: {{ primary.explanation.market_read }}
+        </p>
       </section>
 
       <section v-if="mandate" class="panel">
@@ -190,7 +220,7 @@ watch(
         <div class="ctx">
           <p class="tech">
             tracked since {{ (contextTracked.added_at || '').slice(0, 10) }}
-            <template v-if="contextTracked.price_eur != null"> · {{ contextTracked.price_eur }} EUR</template>
+            <template v-if="trackedDisplayPrice != null"> · {{ moneyOrDash(trackedDisplayPrice, runCurrency) }}</template>
           </p>
           <p v-if="contextTracked.quote" class="sub">
             quote {{ contextTracked.quote.price }} {{ contextTracked.quote.currency }}
@@ -215,7 +245,7 @@ watch(
         <div class="ctx">
           <p class="tech">
             qty {{ contextHolding.quantity }} · avg cost {{ contextHolding.avg_cost }}
-            <template v-if="contextHolding.market_value_eur != null"> · mv {{ contextHolding.market_value_eur }} EUR</template>
+            <template v-if="holdingDisplayValue != null"> · mv {{ moneyOrDash(holdingDisplayValue, runCurrency) }}</template>
             <template v-if="contextHolding.pnl_pct != null"> · pnl {{ contextHolding.pnl_pct }}%</template>
             <template v-if="contextHolding.weight_pct != null"> · wgt {{ contextHolding.weight_pct }}%</template>
             <template v-if="contextHolding.weight_cost_pct != null"> (cost wgt {{ contextHolding.weight_cost_pct }}%)</template>
@@ -257,6 +287,7 @@ watch(
             <p v-if="turn.hypothesis" class="mute">Hypothesis: {{ turn.hypothesis }}</p>
             <p v-if="turn.question_hint" class="mute">Hint: {{ turn.question_hint }}</p>
             <p v-if="turn.research_excerpt" class="rationale">{{ turn.research_excerpt }}</p>
+            <p v-if="turn.tension" class="mute">Tension: {{ turn.tension }}</p>
             <ul v-if="turnAnswerDetails(turn).length" class="turns turn-answers">
               <li v-for="d in turnAnswerDetails(turn)" :key="d.horizon">
                 <strong>{{ d.horizon }}</strong> {{ d.action }}

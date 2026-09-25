@@ -39,15 +39,12 @@ final class TrackerRepository
                     f.as_of AS fundamentals_as_of,
                     f.completeness_state AS fundamentals_state,
                     f.coverage_score AS fundamentals_score,
-                    f.missing_fields_json AS fundamentals_missing,
-                    fx.rate AS fx_rate
+                    f.missing_fields_json AS fundamentals_missing
              FROM tracker t
              INNER JOIN instruments i ON i.id = t.instrument_id
              LEFT JOIN quotes q ON q.instrument_id = t.instrument_id
              LEFT JOIN technicals tech ON tech.instrument_id = t.instrument_id
-             LEFT JOIN fundamentals f ON f.instrument_id = t.instrument_id
-             LEFT JOIN fx_rates fx
-               ON fx.base_currency = q.currency AND fx.quote_currency = \'EUR\'';
+             LEFT JOIN fundamentals f ON f.instrument_id = t.instrument_id';
         if (!$includeArchived) {
             $sql .= ' WHERE t.archived_at IS NULL';
         }
@@ -237,9 +234,8 @@ final class TrackerRepository
     {
         $price = $r['quote_price'] !== null ? (float) $r['quote_price'] : null;
         $currency = $r['quote_currency'] !== null ? (string) $r['quote_currency'] : ($r['currency'] ?? 'EUR');
-        $rate = strtoupper((string) $currency) === 'EUR'
-            ? 1.0
-            : ($r['fx_rate'] !== null ? (float) $r['fx_rate'] : null);
+        $displayCurrency = Currency::display($this->db);
+        $rate = Currency::rate($this->db, (string) $currency, $displayCurrency);
 
         $features = [];
         if (is_string($r['features_json']) && $r['features_json'] !== '') {
@@ -271,9 +267,8 @@ final class TrackerRepository
                 'source' => $r['quote_source'],
                 'updated_at' => $r['quote_updated_at'],
             ] : null,
-            // There is no cost basis to show for an unowned name, so the EUR figure the
-            // Tracker table renders is just the quote converted (0010: UI is always EUR).
-            'price_eur' => $price !== null && $rate !== null ? round($price * $rate, 4) : null,
+            'price_display' => $price !== null && $rate !== null ? round($price * $rate, 4) : null,
+            'display_currency' => $displayCurrency,
             'daily_change_pct' => $this->dailyChangePct((int) $r['instrument_id'], $price, $r['quote_as_of']),
             'technicals' => $features !== [] ? [
                 'as_of' => $r['technicals_as_of'],

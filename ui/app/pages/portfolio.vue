@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { defineAsyncComponent } from 'vue'
 import type {
   Holding,
   HoldingInput,
@@ -16,6 +17,8 @@ const editingId = ref<number | null>(null)
 const editingTxId = ref<number | null>(null)
 const formOpen = ref(false)
 const lotPickerHolding = ref<Holding | null>(null)
+const expandedHistoryId = ref<number | null>(null)
+const PerformanceHistory = defineAsyncComponent(() => import('~/components/PerformanceHistory.vue'))
 
 const today = () => new Date().toISOString().slice(0, 10)
 
@@ -48,7 +51,8 @@ const {
 const refreshBook = () => Promise.all([refresh(), refreshContext()])
 
 const holdings = computed(() => data.value?.holdings ?? [])
-const portfolioEur = computed(() => data.value?.portfolio_market_value_eur ?? null)
+const portfolioValue = computed(() => data.value?.portfolio_market_value_display ?? null)
+const displayCurrency = computed(() => data.value?.display_currency ?? 'EUR')
 // Ingest / Run / Force are inline buttons in the layout header — one combined run covers both
 // books (0019), so there is nothing per-tab to trigger from here.
 const { message: opsMessage, error: opsError, advising } = useGlobalOps()
@@ -159,6 +163,10 @@ function dailyChangeClass(change: number | null) {
   return change > 0 ? 'daily-change--up' : 'daily-change--down'
 }
 
+function toggleHistory(instrumentId: number) {
+  expandedHistoryId.value = expandedHistoryId.value === instrumentId ? null : instrumentId
+}
+
 function openEditLot(h: Holding, tx: Transaction | null) {
   lotPickerHolding.value = null
   editingId.value = h.id
@@ -253,7 +261,7 @@ async function removeHolding(h: Holding) {
       <div class="module-metrics" aria-label="Portfolio summary">
         <div class="module-metric">
           <span class="module-metric-label">Market value</span>
-          <strong>{{ moneyOrDash(portfolioEur, 'EUR') }}</strong>
+          <strong>{{ moneyOrDash(portfolioValue, displayCurrency) }}</strong>
         </div>
         <div class="module-metric">
           <span class="module-metric-label">Holdings</span>
@@ -267,7 +275,7 @@ async function removeHolding(h: Holding) {
     </section>
 
     <p class="module-guide">
-      Cost basis includes commission. Quotes and FX are normalized to EUR; holdings also receive
+      Cost basis includes commission. Converted values use {{ displayCurrency }}; holdings also receive
       news and technical context. Claude researches and Jev decides using the portfolio mandate.
       The shared run also covers the <NuxtLink to="/tracker">Tracker module</NuxtLink>.
     </p>
@@ -391,8 +399,11 @@ async function removeHolding(h: Holding) {
           <button type="button" class="ghost" :disabled="pending" @click="refreshBook()">Reload</button>
         </div>
       </div>
-      <p v-if="portfolioEur != null" class="ok">
-        Market value in EUR: {{ moneyOrDash(portfolioEur, 'EUR') }}
+      <p v-if="portfolioValue != null" class="ok">
+        Market value in {{ displayCurrency }}: {{ moneyOrDash(portfolioValue, displayCurrency) }}
+      </p>
+      <p v-else-if="holdings.length" class="mute">
+        Market value pending FX or quotes.
       </p>
       <p v-if="pending">Loading…</p>
       <p v-else-if="holdings.length === 0" class="mute">No holdings yet.</p>
@@ -404,15 +415,16 @@ async function removeHolding(h: Holding) {
             <th>Qty</th>
             <th>Quote</th>
             <th>Cost</th>
-            <th>Value (EUR)</th>
-            <th>P&amp;L (EUR)</th>
+            <th>Value ({{ displayCurrency }})</th>
+            <th>P&amp;L ({{ displayCurrency }})</th>
             <th>P&amp;L %</th>
             <th class="daily-change-heading">Daily %</th>
             <th aria-label="Actions"></th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="h in holdings" :key="h.id">
+          <template v-for="h in holdings" :key="h.id">
+          <tr>
             <td>
               <strong>{{ h.instrument.symbol }}</strong>
               <span class="sub">
@@ -439,23 +451,23 @@ async function removeHolding(h: Holding) {
             </td>
             <td>
               {{ money(h.cost_native, h.instrument.currency) }}
-              <span v-if="h.instrument.currency.toUpperCase() !== 'EUR'" class="sub">
-                {{ h.cost_eur == null ? 'EUR pending FX' : moneyOrDash(h.cost_eur) }}
+              <span v-if="h.instrument.currency.toUpperCase() !== displayCurrency" class="sub">
+                {{ h.cost_display == null ? `${displayCurrency} pending FX` : moneyOrDash(h.cost_display, displayCurrency) }}
               </span>
             </td>
             <td>
-              {{ moneyOrDash(h.market_value_eur) }}
+              {{ h.market_value_display == null ? 'pending FX' : moneyOrDash(h.market_value_display, displayCurrency) }}
               <span
-                v-if="h.market_value_native != null && (h.quote?.currency || h.instrument.currency).toUpperCase() !== 'EUR'"
+                v-if="h.market_value_native != null && (h.quote?.currency || h.instrument.currency).toUpperCase() !== displayCurrency"
                 class="sub"
               >
                 {{ money(h.market_value_native, h.quote?.currency || h.instrument.currency) }} native
               </span>
             </td>
-            <td :class="{ ok: (h.pnl_eur ?? 0) > 0, bad: (h.pnl_eur ?? 0) < 0 }">
-              {{ moneyOrDash(h.pnl_eur) }}
+            <td :class="{ ok: (h.pnl_display ?? 0) > 0, bad: (h.pnl_display ?? 0) < 0 }">
+              {{ h.pnl_display == null ? 'pending FX' : moneyOrDash(h.pnl_display, displayCurrency) }}
               <span
-                v-if="h.pnl_native != null && h.instrument.currency.toUpperCase() !== 'EUR'"
+                v-if="h.pnl_native != null && h.instrument.currency.toUpperCase() !== displayCurrency"
                 class="sub"
               >
                 {{ money(h.pnl_native, h.instrument.currency) }} native
@@ -468,6 +480,19 @@ async function removeHolding(h: Holding) {
               {{ pctOrDash(h.daily_change_pct) }}
             </td>
             <td class="row-actions portfolio-actions">
+              <button
+                type="button"
+                class="ghost portfolio-icon-btn"
+                :aria-label="`${expandedHistoryId === h.instrument.id ? 'Close' : 'Show'} performance chart for ${h.instrument.symbol}`"
+                :title="`${expandedHistoryId === h.instrument.id ? 'Close' : 'Show'} performance chart for ${h.instrument.symbol}`"
+                :aria-expanded="expandedHistoryId === h.instrument.id"
+                :aria-controls="`portfolio-history-${h.instrument.id}`"
+                @click="toggleHistory(h.instrument.id)"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 19h16v2H2V3h2v16Zm2-3 4-5 3 3 5-7 2 1.4-6.5 9.1-3.3-3.3L7.5 17 6 16Z" />
+                </svg>
+              </button>
               <button
                 type="button"
                 class="ghost portfolio-icon-btn"
@@ -492,6 +517,12 @@ async function removeHolding(h: Holding) {
               </button>
             </td>
           </tr>
+          <tr v-if="expandedHistoryId === h.instrument.id" :id="`portfolio-history-${h.instrument.id}`" class="history-row">
+            <td colspan="10">
+              <PerformanceHistory :instrument-id="h.instrument.id" :symbol="h.instrument.symbol" />
+            </td>
+          </tr>
+          </template>
         </tbody>
       </table>
     </section>
@@ -559,4 +590,6 @@ async function removeHolding(h: Holding) {
   background: #ecebe5;
   color: var(--mute);
 }
+
+.history-row > td { padding: 0; }
 </style>

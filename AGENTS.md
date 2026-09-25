@@ -48,6 +48,8 @@ Implement and review against these docs before inventing behaviour.
 - `spec/decisions/0022-four-layer-ingestion.md` (outcome-oriented registries, cadences, fundamentals, Tracker news)
 - `spec/decisions/0023-free-fundamentals-routing.md` (free-provider fundamentals routing)
 - `spec/decisions/0024-remove-tracker-notes-and-show-daily-change.md` (Tracker note removal, daily change and compact actions)
+- `spec/decisions/0027-layered-advisory-token-budget.md` (layer lenses, layer cards, materiality carry-forward, bare Claude CLI)
+- `spec/decisions/0028-claude-explains-recommendations.md` (post-decision explanation, tension note, market read)
 - `spec/source-matrix-v1.md` — active/candidate provider adoption inventory
 - `spec/tests.md` — acceptance checks and regression
 

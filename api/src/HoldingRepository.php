@@ -541,21 +541,26 @@ final class HoldingRepository
         $qty = (float) $row['quantity'];
         $totalCost = (float) $row['total_cost'];
         $avgCost = (float) $row['avg_cost'];
+        $displayCurrency = Currency::display($this->db);
 
         $quote = $this->latestQuote($instrumentId);
-        $fxToEur = $this->fxRateToEur($currency);
+        $fxToDisplay = Currency::rate($this->db, $currency, $displayCurrency);
         // Prefer quote currency for mark-to-market FX when vendors report a different currency.
         $quoteCurrency = isset($quote['currency']) ? (string) $quote['currency'] : $currency;
-        $fxQuoteToEur = $quoteCurrency === $currency ? $fxToEur : $this->fxRateToEur($quoteCurrency);
+        $fxQuoteToDisplay = Currency::rate($this->db, $quoteCurrency, $displayCurrency);
 
-        $costEur = $fxToEur === null ? null : $totalCost * $fxToEur;
+        $costDisplay = $fxToDisplay === null ? null : $totalCost * $fxToDisplay;
         $price = $quote['price'] ?? null;
         $marketValueNative = $price === null ? null : $qty * $price;
-        $marketValueEur = ($marketValueNative === null || $fxQuoteToEur === null)
+        $marketValueDisplay = ($marketValueNative === null || $fxQuoteToDisplay === null)
             ? null
-            : $marketValueNative * $fxQuoteToEur;
-        $pnlNative = ($marketValueNative === null) ? null : $marketValueNative - $totalCost;
-        $pnlEur = ($marketValueEur === null || $costEur === null) ? null : $marketValueEur - $costEur;
+            : $marketValueNative * $fxQuoteToDisplay;
+        $pnlNative = ($marketValueNative === null || strtoupper($quoteCurrency) !== strtoupper($currency))
+            ? null
+            : $marketValueNative - $totalCost;
+        $pnlDisplay = ($marketValueDisplay === null || $costDisplay === null)
+            ? null
+            : $marketValueDisplay - $costDisplay;
 
         return [
             'id' => (int) $row['id'],
@@ -580,17 +585,17 @@ final class HoldingRepository
             'unit_price' => $avgCost,
             'commission' => null,
             'cost_native' => $totalCost,
-            'cost_eur' => $costEur,
+            'cost_display' => $costDisplay,
             'market_value_native' => $marketValueNative,
-            'market_value_eur' => $marketValueEur,
+            'market_value_display' => $marketValueDisplay,
             'pnl_native' => $pnlNative,
-            'pnl_eur' => $pnlEur,
+            'pnl_display' => $pnlDisplay,
             'pnl_pct' => ($totalCost > 0 && $pnlNative !== null)
                 ? ($pnlNative / $totalCost) * 100.0
                 : null,
             'daily_change_pct' => $this->dailyChangePct($instrumentId, $quote),
-            'fx_to_eur' => $fxToEur,
-            'display_currency' => 'EUR',
+            'fx_to_display' => $fxToDisplay,
+            'display_currency' => $displayCurrency,
             'quote' => $quote,
             'technicals' => $this->technicalsForInstrument($instrumentId),
             'fundamentals' => $this->fundamentalsForInstrument($instrumentId),
@@ -761,21 +766,6 @@ final class HoldingRepository
         }
 
         return (($quotePrice - $previousClose) / $previousClose) * 100.0;
-    }
-
-    private function fxRateToEur(string $currency): ?float
-    {
-        $currency = strtoupper($currency);
-        if ($currency === 'EUR') {
-            return 1.0;
-        }
-        $stmt = $this->db->prepare(
-            'SELECT rate FROM fx_rates
-             WHERE base_currency = :base AND quote_currency = \'EUR\''
-        );
-        $stmt->execute(['base' => $currency]);
-        $row = $stmt->fetch();
-        return $row === false ? null : (float) $row['rate'];
     }
 
     /** @return list<array<string, mixed>> */

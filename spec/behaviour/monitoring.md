@@ -16,17 +16,31 @@ Near-live dashboard view of holdings with market context. Polling delayed or nea
    successful result for the operation.
 2. Quotes run every 15 minutes; daily bars and news daily; complete fundamentals every seven
    days, while missing or partial fundamentals retry daily. Technicals run only when the
-   accepted bars change. FX has an independent cache.
+   accepted bars change. FX has an independent cache covering instrument currencies, quote
+   currencies, monetary-setting source currencies, and every supported display currency (`0025`).
 3. Each requested dataset tries its ordered registry until one response is complete. Quote
    and bars fall back independently. A news or fundamentals snapshot always has one source.
 4. If no complete response exists, the best one-source partial is accepted only when it
    improves the cache. A provider cooldown skips that provider without blocking other work.
 5. Results land in SQLite and Nuxt read models show the latest accepted cache.
 
+### Long-history chart refresh
+
+1. Missing instrument history runs on the next scheduled or manual ingest; accepted history is
+   thereafter due weekly.
+2. Yahoo complete adjusted history is rebuilt into daily (latest year), last-of-ISO-week (years
+   1–5), and last-of-calendar-month (older) points.
+3. One SPY benchmark fetch serves all active US names and one EXSA.DE fetch serves all active
+   European names.
+4. An instrument response that loses either coverage edge does not replace cache. Benchmark
+   failures are reported separately and do not block any instrument or layer.
+5. Ingest statistics add `historical.operations.long_history`; benchmark refresh status is a
+   separate report object rather than an instrument-dataset count.
+
 ### Dashboard glance
 
 1. Operator opens the UI.
-2. Sees holdings + latest available quotes (**money in EUR**), and in the Tracker module the same for names
+2. Sees holdings + latest available quotes (converted money in the configured display currency), and in the Tracker module the same for names
    being considered — price, 1m/3m momentum and RSI, with no cost basis to show.
 3. Sees recent recommendations / alerts summary without opening a separate “pro terminal.”
 
@@ -58,6 +72,7 @@ Near-live dashboard view of holdings with market context. Polling delayed or nea
 - With APIs down, UI still shows last cached bars/quotes rather than a blank portfolio.
 - A frequent quote tick does not refetch bars, news, or fundamentals; unchanged bars do not
   recompute technicals.
+- A frequent quote tick does not refetch long history before its weekly due time.
 
 ## Out of scope here
 

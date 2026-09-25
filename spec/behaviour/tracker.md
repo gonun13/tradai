@@ -41,10 +41,13 @@ keep this?", and give a `better_use` sell (`0013`) a real named alternative to p
   tracked names. Each follows its own cadence (`0022`).
 - **Daily percentage change.** The read model compares the latest quote with the most recent
   stored daily close before the quote's calendar date. Missing inputs produce an unavailable value.
-- **Four lenses.** Tracked names are asked `thesis`, `news`, `technicals`, and
-  `combined`.
-  On the `thesis` lens the question mirrors the portfolio's: whether the case for *buying*
-  holds, not whether the reason for *owning* still does.
+- **Display conversion.** The quote remains native; `price_display` uses the global display
+  currency. Missing required FX renders **pending FX** and never relabels the quote.
+- **Five lenses.** Tracked names are asked `historical`, `fundamentals`, `technicals`, `news`,
+  and `combined` (`0027`).
+  On the `fundamentals` lens the question mirrors the portfolio's: whether the case for *buying*
+  holds, not whether the reason for *owning* still does. On `historical`, whether today's price
+  is a reasonable entry against the name's own record.
 - **Its own horizons: `1m` / `3m` / `6m`, not the holdings' `6m` / `12m` / `24m` (`0020`).**
   An entry-timing question stays short; `24m` exists to back the `no_recovery_24m` loss gate,
   which the tracker never has. The table's gain columns (`1m`, `3m`, `6m`) line up with the

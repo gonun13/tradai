@@ -20,6 +20,8 @@ You open a clear dashboard, see portfolio + live-enough market context, get sche
 - Portfolio manager (CRUD holdings; local-only persistence)
 - **Tracker** — a second book of names of interest, searchable by name or ticker, ingested and researched on the
   same cadence as the portfolio (`0019`)
+- Expandable 1Y / 2Y / 5Y / Max adjusted-performance charts for both books, compared with a
+  compact regional benchmark series (`0026`)
 - Live / near-live monitoring on the dashboard
 - Scheduled agents that run **once per day after US markets close** (full portfolio context for decisions)
 - Alerts when a recommendation crosses an “action needed” threshold
@@ -60,7 +62,7 @@ Also out by scale: multi-user auth, SaaS tenancy, public hosting, high-availabil
 - Personal use only; not investment advice to others
 - Secrets and portfolio data stay on the home machine / LAN
 - Claude usage via subscription OAuth — not `ANTHROPIC_API_KEY` pay-as-you-go
-- **All money shown in the UI is in EUR** (convert non-EUR listings for display)
+- Converted money uses one global display currency (`EUR`, `USD`, `GBP`, or `CHF`; default `EUR`), while native trading figures retain their source currency (`0025`)
 
 ## Happy path (acceptance shape)
 
@@ -78,4 +80,4 @@ See open items in `spec/`: notifications beyond in-app and day-one MIC set. Clau
 
 Research-data routing is locked in `spec/decisions/0022-four-layer-ingestion.md` and the
 fundamentals revision in `spec/decisions/0023-free-fundamentals-routing.md`; FX remains
-the auxiliary Frankfurter service chosen in `0006`.
+the auxiliary Frankfurter service chosen in `0006`, with configurable presentation locked in `0025`.

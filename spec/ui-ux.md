@@ -43,15 +43,16 @@ supporting information only: titles, copy and active navigation also identify th
 
 ## Setup
 
-`/setup` is a neutral utility page with two book-specific cards in module-switcher order:
+`/setup` is a neutral utility page with two book-specific cards in module-switcher order, followed by a compact independent global currency form:
 
 - **Portfolio** appears first and uses the evergreen, square-edged owned-capital identity. Its
-  form contains the Portfolio profile, cash reserve, realised gains elsewhere, the calculated
+  form contains the Portfolio profile, source-aware cash reserve and realised gains elsewhere (each amount has its own four-currency selector), the calculated
   realised total, and **Save portfolio**.
 - **Tracker** uses the cobalt, softer research identity. Its form contains the Investor profile,
   the empty-profile warning, and **Save investor profile**.
+- **Display currency** follows the profiles in a compact neutral row, selects EUR, USD, GBP, or CHF, and has its own loading, success, error, disabled, and save state. Saving it sends only `display_currency`; it never submits either book's unsaved draft.
 
-Each card has independent loading, disabled, success, and error states. Saving a card sends only
+Each form has independent loading, disabled, success, and error states. Saving a form sends only
 that card's fields, so an unsaved draft or persisted value in the other card cannot be overwritten.
 The Investor profile sets the Tracker buying lens and accompanies all advice; the Portfolio
 profile adds sizing, trimming, selling, and tax rules for owned positions.
@@ -65,13 +66,21 @@ locations. Daily schedule and alert-policy details remain outside the Setup page
 ## Responsive and accessible behavior
 
 The Portfolio holdings table keeps each row ledger-like and compact: Symbol omits region; Quote
-omits provider provenance; Cost, Value and P&L suppress duplicate native/EUR figures and never
+omits provider provenance; Cost, Value and P&L suppress duplicate native/display figures and never
 display the FX rate. **Daily %** uses a subtle green, red or neutral cell background according to
 sign, followed by a final column of small labelled edit/delete icon controls.
 
 The Tracker table uses the same **Daily %** sign treatment. Tracker has no operator-note field or
 column; its per-name Run and Remove actions are compact icons with explicit accessible labels and
 tooltips, while Bought remains a text action.
+
+Every Portfolio and Tracker row also has a labelled chart icon. Activating it expands a shared,
+lazy-loaded SVG performance chart below that row; only one row in a table is open at once. The
+chart defaults to 5Y and offers 1Y, 2Y, 5Y, and Max. It shows indexed stock and regional-benchmark
+performance, a solid/dashed labelled legend (not color alone), as-of and comparison-start dates,
+endpoint returns, native currencies, and loading/empty/stale/benchmark-warning states. Range and
+toggle controls expose keyboard focus, `aria-expanded`, and explicit accessible labels. On narrow
+screens the chart remains legible in a horizontally contained surface.
 
 - The utility bar may wrap on medium screens and stacks above the module on narrow screens.
 - Setup's Portfolio and Tracker cards sit side by side on desktop and stack in the same order on

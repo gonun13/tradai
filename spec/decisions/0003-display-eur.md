@@ -1,5 +1,8 @@
 # 0003 — Display currency is EUR
 
+> Superseded in part by `0025-configurable-display-currency`: EUR remains the default and FX
+> pivot, but presentation may now be EUR, USD, GBP, or CHF.
+
 Date: 2026-09-20
 
 ## Change

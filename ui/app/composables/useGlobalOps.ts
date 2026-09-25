@@ -62,7 +62,7 @@ export function useGlobalOps() {
           }
         | undefined
       const layerLabels: Record<string, string> = {
-        historical: 'Historical (quotes + bars)',
+        historical: 'Historical (quotes + bars + long history)',
         fundamentals: 'Fundamentals',
         technicals: 'Technicals',
         news: 'News',

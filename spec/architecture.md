@@ -30,7 +30,7 @@ Audience: engineering. Structure, boundaries, and constraints for a solo, local 
 | **Slim PHP API** | Local HTTP API: holdings CRUD, read models for dashboard, alert ack, trigger “run now”. Owns portfolio writes. |
 | **SQLite** | Single-node state on a Docker volume: portfolio, cached bars, agent runs, recommendations, alerts. |
 | **Python worker** | Scheduled ingestion + analysis. Computes technicals locally; calls market/news APIs; invokes Claude Agent CLI + Jev with **full portfolio context** for decisions. Writes results via API or shared DB. |
-| **Scheduler** | Worker loop with persisted per-instrument due state — quotes 15m, bars/news daily, complete fundamentals 7d and missing/partial fundamentals daily, technicals on bar change; **agent advisory once per day after US markets close**. |
+| **Scheduler** | Worker loop with persisted per-instrument due state — quotes 15m, bars/news daily, adjusted long history weekly, complete fundamentals 7d and missing/partial fundamentals daily, technicals on bar change; **agent advisory once per day after US markets close**. |
 
 ## Client vs server vs background
 
@@ -54,10 +54,11 @@ Audience: engineering. Structure, boundaries, and constraints for a solo, local 
 
 ## Interfaces (coarse)
 
-- **Browser → Slim:** holdings CRUD, dashboard read models, alert acknowledge, manual “run now.”
-- **Worker → market/news/FX APIs:** ordered per-operation adapter registries for quotes, bars, headlines, and light fundamentals; local technicals; independent EUR FX.
+- **Browser → Slim:** holdings CRUD, dashboard read models, lazy range-based performance history,
+  alert acknowledge, manual “run now.”
+- **Worker → market/news/FX APIs:** ordered per-operation adapter registries for quotes, bars, headlines, and light fundamentals; local technicals; independent Frankfurter base→EUR pivot rates used for configured display conversion (`0025`).
 - **Worker → Claude Agent CLI / Jev:** orchestrated **researcher/decider** loop with full portfolio context — Claude builds lensed Jev requests and may iterate scenarios; Jev returns typed decisions (`0009`). Not a one-shot rationale→decision call.
-- **Worker → Slim or shared SQLite:** persist AgentRun (incl. research + info-needs), Recommendation (combined action, supporting lenses, conversation), Alert, cached bars.
+- **Worker → Slim or shared SQLite:** persist AgentRun (incl. research + info-needs), Recommendation (combined action, supporting lenses, conversation), Alert, cached bars, and separately compacted adjusted long history.
 
 The implemented browser surface is Slim as the single BFF: holdings, tracker, settings, theses,
 search, ingest, advisory runs, recommendations, alerts, and outcomes are exposed through Slim.
@@ -83,6 +84,7 @@ module-specific pages and logs supply the distinct book context.
 | Availability | Best-effort while the home machine is on; no SLA |
 | Latency | Quote refresh: seconds–minutes (delayed OK). Agent runs: minutes, async |
 | Offline | Not required; a fresher or more complete cached dataset is never overwritten by a worse provider response |
+| Chart history | Weekly, chart-only adjusted series; benchmark failure is isolated from instrument ingestion and the UI |
 | i18n | Not required for MVP |
 
 ## Assumptions carried from design

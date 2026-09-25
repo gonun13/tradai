@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { defineAsyncComponent } from 'vue'
 import type {
   Recommendation,
   SymbolHit,
@@ -18,11 +19,14 @@ const message = ref('')
 const error = ref('')
 const busy = ref(false)
 const advisingSingle = ref<string | null>(null)
+const expandedHistoryId = ref<number | null>(null)
+const PerformanceHistory = defineAsyncComponent(() => import('~/components/PerformanceHistory.vue'))
 
 const { data, pending, refresh, error: loadError } = await useAsyncData('tracker', () =>
   api.listTracker(),
 )
 const entries = computed<TrackerEntry[]>(() => data.value?.tracker ?? [])
+const displayCurrency = computed(() => data.value?.display_currency ?? 'EUR')
 
 const {
   data: contextPreviewData,
@@ -216,6 +220,10 @@ function dailyChangeClass(change: number | null) {
   }
   return change > 0 ? 'daily-change--up' : 'daily-change--down'
 }
+
+function toggleHistory(instrumentId: number) {
+  expandedHistoryId.value = expandedHistoryId.value === instrumentId ? null : instrumentId
+}
 </script>
 
 <template>
@@ -363,7 +371,7 @@ function dailyChangeClass(change: number | null) {
             <th>Symbol</th>
             <th>Name</th>
             <th>Price</th>
-            <th>Price (EUR)</th>
+            <th>Price ({{ displayCurrency }})</th>
             <th class="daily-change-heading">Daily %</th>
             <th>1m</th>
             <th>3m</th>
@@ -374,11 +382,12 @@ function dailyChangeClass(change: number | null) {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="e in entries" :key="e.id">
+          <template v-for="e in entries" :key="e.id">
+          <tr>
             <td><strong>{{ e.symbol }}</strong></td>
             <td class="mute">{{ e.name || '—' }}</td>
             <td>{{ e.quote ? moneyOrDash(e.quote.price, e.quote.currency) : '—' }}</td>
-            <td>{{ moneyOrDash(e.price_eur) }}</td>
+            <td>{{ e.price_display == null && e.quote ? 'pending FX' : moneyOrDash(e.price_display, displayCurrency) }}</td>
             <td class="daily-change" :class="dailyChangeClass(e.daily_change_pct)">
               {{ pctOrDash(e.daily_change_pct) }}
             </td>
@@ -388,6 +397,19 @@ function dailyChangeClass(change: number | null) {
             <td>{{ fmtNum(e.technicals?.features.rsi_14, 1) }}</td>
             <td class="mute">{{ (e.added_at || '').slice(0, 10) }}</td>
             <td class="row-actions">
+              <button
+                type="button"
+                class="ghost icon-btn"
+                :aria-label="`${expandedHistoryId === e.instrument_id ? 'Close' : 'Show'} performance chart for ${e.symbol}`"
+                :title="`${expandedHistoryId === e.instrument_id ? 'Close' : 'Show'} performance chart for ${e.symbol}`"
+                :aria-expanded="expandedHistoryId === e.instrument_id"
+                :aria-controls="`tracker-history-${e.instrument_id}`"
+                @click="toggleHistory(e.instrument_id)"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 19h16v2H2V3h2v16Zm2-3 4-5 3 3 5-7 2 1.4-6.5 9.1-3.3-3.3L7.5 17 6 16Z" />
+                </svg>
+              </button>
               <NuxtLink
                 class="ghost bought-action"
                 title="Record an acquisition — this moves it to the Portfolio module"
@@ -421,6 +443,12 @@ function dailyChangeClass(change: number | null) {
               </button>
             </td>
           </tr>
+          <tr v-if="expandedHistoryId === e.instrument_id" :id="`tracker-history-${e.instrument_id}`" class="history-row">
+            <td colspan="11">
+              <PerformanceHistory :instrument-id="e.instrument_id" :symbol="e.symbol" />
+            </td>
+          </tr>
+          </template>
         </tbody>
       </table>
     </section>
@@ -505,6 +533,8 @@ function dailyChangeClass(change: number | null) {
   background: #ecebe5;
   color: var(--mute);
 }
+
+.history-row > td { padding: 0; }
 
 .actions {
   display: flex;

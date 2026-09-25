@@ -70,6 +70,40 @@ export type FundamentalsSnapshot = {
   updated_at?: string
 }
 
+export type HistoryPoint = {
+  date: string
+  adjusted_close: number
+  resolution: 'daily' | 'weekly' | 'monthly'
+  normalized_value: number
+}
+
+export type HistorySeries = {
+  instrument_id?: number
+  region?: 'eu' | 'us'
+  symbol: string
+  name?: string | null
+  native_currency: string
+  source: string | null
+  as_of: string | null
+  earliest_date: string | null
+  coverage_start: string | null
+  normalization_date: string | null
+  stale: boolean | null
+  endpoint_return_pct: number | null
+  points: HistoryPoint[]
+}
+
+export type HistoryResponse = {
+  ok: boolean
+  range: '1y' | '2y' | '5y' | 'max'
+  basis: 'adjusted_performance'
+  normalization_base: 100
+  comparison_start: string | null
+  warning: string | null
+  stock: HistorySeries
+  benchmark: HistorySeries | null
+}
+
 export type AgentContextPreviewItem = {
   book: Book
   symbol: string
@@ -98,15 +132,15 @@ export type Holding = {
   unit_price: number | null
   commission: number | null
   cost_native: number
-  cost_eur: number | null
+  cost_display: number | null
   market_value_native: number | null
-  market_value_eur: number | null
+  market_value_display: number | null
   pnl_native: number | null
-  pnl_eur: number | null
+  pnl_display: number | null
   pnl_pct: number | null
   daily_change_pct: number | null
-  fx_to_eur: number | null
-  display_currency: 'EUR'
+  fx_to_display: number | null
+  display_currency: DisplayCurrency
   quote: Quote | null
   technicals: TechnicalsSnapshot | null
   fundamentals: FundamentalsSnapshot | null
@@ -138,8 +172,8 @@ export function useHoldingsApi() {
     $fetch<{
       ok: boolean
       holdings: Holding[]
-      display_currency: string
-      portfolio_market_value_eur: number | null
+      display_currency: DisplayCurrency
+      portfolio_market_value_display: number | null
     }>('/api/holdings')
 
   const create = (body: HoldingInput) =>
@@ -278,8 +312,9 @@ export function useHoldingsApi() {
   const saveSettings = (body: {
     investor_profile_text?: string | null
     portfolio_profile_text?: string | null
-    cash_eur?: number | null
-    realized_gains_ytd_override_eur?: number | null
+    display_currency?: DisplayCurrency
+    cash?: MoneySettingInput | null
+    realized_gains_ytd_override?: MoneySettingInput | null
   }) =>
     $fetch<{ ok: boolean; settings: PortfolioSettings }>('/api/portfolio/settings', {
       method: 'PUT',
@@ -308,13 +343,14 @@ export function useHoldingsApi() {
 
   // 0019: the tracker — a second book, not a note. Same ingest and same agent research as
   // the portfolio, so entries carry a quote and technicals like a holding does.
-  const listTracker = () => $fetch<{ ok: boolean; tracker: TrackerEntry[] }>('/api/tracker')
+  const listTracker = () =>
+    $fetch<{ ok: boolean; tracker: TrackerEntry[]; display_currency: DisplayCurrency }>('/api/tracker')
 
   const contextPreview = (book: Book) =>
     $fetch<{
       ok: boolean
       book: Book
-      display_currency: 'EUR'
+      display_currency: DisplayCurrency
       instruments: AgentContextPreviewItem[]
     }>('/api/context/preview', { query: { book } })
 
@@ -333,6 +369,9 @@ export function useHoldingsApi() {
       { query: { q } },
     )
 
+  const instrumentHistory = (id: number, range: '1y' | '2y' | '5y' | 'max') =>
+    $fetch<HistoryResponse>(`/api/instruments/${id}/history`, { query: { range } })
+
   return {
     list,
     create,
@@ -350,6 +389,7 @@ export function useHoldingsApi() {
     updateTracker,
     removeTracker,
     searchInstruments,
+    instrumentHistory,
     refreshMarket,
     ingestReport,
     runAdvisory,
@@ -438,9 +478,13 @@ export type AgentContextHolding = {
   quantity: number
   avg_cost: number
   total_cost: number
-  cost_eur: number | null
-  market_value_eur: number | null
-  pnl_eur: number | null
+  cost_display: number | null
+  market_value_display: number | null
+  pnl_display: number | null
+  /** Historical pre-0025 snapshots. */
+  cost_eur?: number | null
+  market_value_eur?: number | null
+  pnl_eur?: number | null
   pnl_pct: number | null
   weight_pct: number | null
   weight_cost_pct: number | null
@@ -475,12 +519,18 @@ export type AgentContextHolding = {
 }
 
 export type AgentContext = {
-  display_currency: string
-  portfolio_market_value_eur: number | null
-  portfolio_cost_eur: number | null
-  cash_eur: number | null
-  portfolio_total_eur: number | null
-  realized_gains_ytd_eur: number
+  display_currency: DisplayCurrency
+  portfolio_market_value_display: number | null
+  portfolio_cost_display: number | null
+  cash_display: number | null
+  portfolio_total_display: number | null
+  realized_gains_ytd_display: number | null
+  /** Historical pre-0025 snapshots remain readable and are never rewritten. */
+  portfolio_market_value_eur?: number | null
+  portfolio_cost_eur?: number | null
+  cash_eur?: number | null
+  portfolio_total_eur?: number | null
+  realized_gains_ytd_eur?: number | null
   calendar_year: number
   tracker: Array<{ symbol: string; name: string | null }>
   profiles: { investor: string | null; portfolio: string | null }
@@ -503,7 +553,9 @@ export type AgentContextTracked = {
   region: string | null
   currency: string
   quote: { price: number | null; currency: string | null; as_of: string | null } | null
-  price_eur: number | null
+  price_display: number | null
+  /** Historical pre-0025 snapshots. */
+  price_eur?: number | null
   technicals: TechnicalFeatures | null
   fundamentals: FundamentalsSnapshot | null
   news: Array<{
@@ -526,6 +578,8 @@ export type ConversationTurn = {
   hypothesis?: string
   question_hint?: string
   research_excerpt?: string
+  // 0028: set on an `explanation` turn.
+  tension?: string | null
   answers?: Record<string, { action?: string; payload?: Record<string, unknown> }>
 }
 
@@ -587,8 +641,9 @@ export type TrackerEntry = {
     isin: string | null
   }
   quote: Quote | null
-  // No cost basis exists for an unowned name, so the EUR figure is just the converted quote.
-  price_eur: number | null
+  // No cost basis exists for an unowned name, so this is the converted quote.
+  price_display: number | null
+  display_currency: DisplayCurrency
   daily_change_pct: number | null
   technicals: TechnicalsSnapshot | null
   fundamentals: FundamentalsSnapshot | null
@@ -624,11 +679,32 @@ export type PortfolioSettings = {
   // the tracker); portfolio = the rules for what you already own (drives holdings).
   investor_profile_text: string | null
   portfolio_profile_text: string | null
-  cash_eur: number | null
-  realized_gains_ytd_from_disposals_eur: number | null
-  realized_gains_ytd_override_eur: number | null
-  realized_gains_ytd_eur: number
+  display_currency: DisplayCurrency
+  display_currency_options: DisplayCurrency[]
+  cash: MoneySetting
+  realized_gains_ytd_from_disposals_display: number | null
+  realized_gains_ytd_override: MoneySetting
+  realized_gains_ytd_display: number | null
   calendar_year: number
+}
+
+export type DisplayCurrency = 'EUR' | 'USD' | 'GBP' | 'CHF'
+
+export type MoneySetting = {
+  amount: number | null
+  currency: DisplayCurrency | null
+  display_amount: number | null
+}
+
+export type MoneySettingInput = {
+  amount: number
+  currency: DisplayCurrency
+}
+
+export type RecommendationExplanation = {
+  text: string
+  tension: string | null
+  market_read: string | null
 }
 
 export type Recommendation = {
@@ -656,6 +732,12 @@ export type Recommendation = {
   jev: Record<string, unknown> | null
   jev_lenses: Record<string, { action?: string; payload?: Record<string, unknown> }> | null
   conversation: ConversationTurn[] | null
+  // 0027: set when an unchanged subject was carried forward from the run that decided it.
+  carried_from_run_id: number | null
+  carried_from_at: string | null
+  // 0028: Claude's plain-language why for the combined decision (same on every horizon row).
+  // Meant to be read — unlike `rationale`, it is not stripped from page state.
+  explanation: RecommendationExplanation | null
   created_at: string
   updated_at: string
 }

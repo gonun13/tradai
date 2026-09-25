@@ -100,7 +100,7 @@ def compose_mandate(profiles: dict[str, Any] | None, book: str = "portfolio") ->
 def label_loss_gate(
     *,
     pnl_pct: float | None,
-    realized_gains_ytd_eur: float | None,
+    realized_gains_ytd_display: float | None,
     horizon_choices: dict[str, str],
 ) -> str | None:
     """
@@ -110,7 +110,7 @@ def label_loss_gate(
     """
     if pnl_pct is None or pnl_pct >= 0:
         return "not_at_loss" if pnl_pct is not None else None
-    if (realized_gains_ytd_eur or 0.0) > 0:
+    if (realized_gains_ytd_display or 0.0) > 0:
         return "offset_same_year"
     if horizon_choices.get(RECOVERY_HORIZON) == "sell":
         return "no_recovery_24m"

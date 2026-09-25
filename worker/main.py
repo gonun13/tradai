@@ -74,7 +74,7 @@ def start_advisory(trigger_kind: str = "manual", *, force: bool = False) -> dict
             )
             return cached
 
-        run_id = _advisory.create_run(trigger_kind)
+        run_id = _advisory.create_run(trigger_kind, force=force)
 
         def _job() -> None:
             print(json.dumps({"service": "tradai-worker", "event": "advisory_started",
@@ -123,7 +123,7 @@ def start_advisory_single(symbol: str, force: bool = False) -> dict:
             )
             return cached
 
-        run_id = _advisory.create_run("manual", target_symbol=symbol)
+        run_id = _advisory.create_run("manual", target_symbol=symbol, force=force)
 
         def _job() -> None:
             print(json.dumps({"service": "tradai-worker", "event": "advisory_started",

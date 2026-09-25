@@ -18,13 +18,18 @@ use PDO;
  */
 final class SettingsRepository
 {
-    private const CASH_EUR = 'cash_eur';
-    private const REALIZED_OVERRIDE_EUR = 'realized_gains_ytd_override_eur';
+    private const DISPLAY_CURRENCY = 'display_currency';
+    private const CASH_AMOUNT = 'cash_amount';
+    private const CASH_CURRENCY = 'cash_currency';
+    private const REALIZED_OVERRIDE_AMOUNT = 'realized_gains_ytd_override_amount';
+    private const REALIZED_OVERRIDE_CURRENCY = 'realized_gains_ytd_override_currency';
+    private const CURRENCY_MIGRATION = 'currency_settings_migration_v1';
     private const INVESTOR_PROFILE_TEXT = 'investor_profile_text';
     private const PORTFOLIO_PROFILE_TEXT = 'portfolio_profile_text';
 
     public function __construct(private readonly PDO $db)
     {
+        $this->migrateLegacyMoneySettings();
     }
 
     public function get(string $key): ?string
@@ -46,16 +51,27 @@ final class SettingsRepository
     /** @return array<string, mixed> */
     public function portfolio(): array
     {
-        $fromDisposals = $this->realizedYtdFromDisposals();
-        $override = $this->getFloat(self::REALIZED_OVERRIDE_EUR);
+        $display = Currency::display($this->db);
+        $fromDisposals = $this->realizedYtdFromDisposals($display);
+        $cash = $this->money(self::CASH_AMOUNT, self::CASH_CURRENCY, $display);
+        $override = $this->money(
+            self::REALIZED_OVERRIDE_AMOUNT,
+            self::REALIZED_OVERRIDE_CURRENCY,
+            $display
+        );
+        $realized = $fromDisposals === null || ($override['amount'] !== null && $override['display_amount'] === null)
+            ? null
+            : round($fromDisposals + ($override['display_amount'] ?? 0.0), 2);
 
         return [
+            'display_currency' => $display,
+            'display_currency_options' => Currency::SUPPORTED,
             'investor_profile_text' => $this->get(self::INVESTOR_PROFILE_TEXT),
             'portfolio_profile_text' => $this->get(self::PORTFOLIO_PROFILE_TEXT),
-            'cash_eur' => $this->getFloat(self::CASH_EUR),
-            'realized_gains_ytd_from_disposals_eur' => $fromDisposals,
-            'realized_gains_ytd_override_eur' => $override,
-            'realized_gains_ytd_eur' => round(($fromDisposals ?? 0.0) + ($override ?? 0.0), 2),
+            'cash' => $cash,
+            'realized_gains_ytd_from_disposals_display' => $fromDisposals,
+            'realized_gains_ytd_override' => $override,
+            'realized_gains_ytd_display' => $realized,
             'calendar_year' => (int) gmdate('Y'),
         ];
     }
@@ -75,33 +91,28 @@ final class SettingsRepository
             $this->set($key, $trimmed === '' ? null : $trimmed);
         }
 
-        foreach ([self::CASH_EUR, self::REALIZED_OVERRIDE_EUR] as $key) {
-            if (!array_key_exists($key, $input)) {
-                continue;
-            }
-            $raw = $input[$key];
-            if ($raw === null || $raw === '') {
-                $this->set($key, null);
-                continue;
-            }
-            if (!is_numeric($raw)) {
-                throw new \InvalidArgumentException($key . ' must be numeric');
-            }
-            $this->set($key, (string) (float) $raw);
+        if (array_key_exists(self::DISPLAY_CURRENCY, $input)) {
+            $this->set(self::DISPLAY_CURRENCY, Currency::validate($input[self::DISPLAY_CURRENCY]));
         }
+
+        $this->updateMoney($input, 'cash', self::CASH_AMOUNT, self::CASH_CURRENCY);
+        $this->updateMoney(
+            $input,
+            'realized_gains_ytd_override',
+            self::REALIZED_OVERRIDE_AMOUNT,
+            self::REALIZED_OVERRIDE_CURRENCY
+        );
 
         return $this->portfolio();
     }
 
-    /** Sum of this calendar year's FIFO disposals, converted to EUR. */
-    private function realizedYtdFromDisposals(): ?float
+    /** Sum of this calendar year's FIFO disposals in the selected display currency. */
+    private function realizedYtdFromDisposals(string $display): ?float
     {
         $year = gmdate('Y');
         $rows = $this->db->prepare(
-            "SELECT d.realized_pnl, d.currency, fx.rate
+            "SELECT d.realized_pnl, d.currency
              FROM realized_disposals d
-             LEFT JOIN fx_rates fx
-               ON fx.base_currency = d.currency AND fx.quote_currency = 'EUR'
              WHERE substr(d.trade_date, 1, 4) = :year"
         );
         $rows->execute(['year' => $year]);
@@ -113,10 +124,9 @@ final class SettingsRepository
         $total = 0.0;
         foreach ($all as $row) {
             $currency = strtoupper((string) $row['currency']);
-            $rate = $currency === 'EUR' ? 1.0 : ($row['rate'] !== null ? (float) $row['rate'] : null);
+            $rate = Currency::rate($this->db, $currency, $display);
             if ($rate === null) {
-                // No FX on hand — skip rather than silently mis-state the gate input.
-                continue;
+                return null;
             }
             $total += ((float) $row['realized_pnl']) * $rate;
         }
@@ -127,5 +137,76 @@ final class SettingsRepository
     {
         $raw = $this->get($key);
         return $raw === null || $raw === '' ? null : (float) $raw;
+    }
+
+    /** @return array{amount: ?float, currency: ?string, display_amount: ?float} */
+    private function money(string $amountKey, string $currencyKey, string $display): array
+    {
+        $amount = $this->getFloat($amountKey);
+        $currency = $this->get($currencyKey);
+        if ($amount === null) {
+            return ['amount' => null, 'currency' => $currency, 'display_amount' => null];
+        }
+        $currency = strtoupper(trim((string) ($currency ?: $display)));
+        return [
+            'amount' => $amount,
+            'currency' => $currency,
+            'display_amount' => ($converted = Currency::convert($this->db, $amount, $currency, $display)) === null
+                ? null
+                : round($converted, 2),
+        ];
+    }
+
+    /** @param array<string, mixed> $input */
+    private function updateMoney(array $input, string $field, string $amountKey, string $currencyKey): void
+    {
+        if (!array_key_exists($field, $input)) {
+            return;
+        }
+        $raw = $input[$field];
+        if ($raw === null || $raw === '') {
+            $this->set($amountKey, null);
+            $this->set($currencyKey, null);
+            return;
+        }
+        if (!is_array($raw)) {
+            throw new \InvalidArgumentException($field . ' must be an amount/currency object or null');
+        }
+        $amount = $raw['amount'] ?? null;
+        if ($amount === null || $amount === '') {
+            $this->set($amountKey, null);
+            $this->set($currencyKey, null);
+            return;
+        }
+        if (!is_numeric($amount)) {
+            throw new \InvalidArgumentException($field . '.amount must be numeric');
+        }
+        $currency = Currency::validate($raw['currency'] ?? '');
+        $this->set($amountKey, (string) (float) $amount);
+        $this->set($currencyKey, $currency);
+    }
+
+    private function migrateLegacyMoneySettings(): void
+    {
+        if ($this->get(self::DISPLAY_CURRENCY) === null) {
+            $this->set(self::DISPLAY_CURRENCY, 'EUR');
+        }
+        if ($this->get(self::CURRENCY_MIGRATION) === '1') {
+            return;
+        }
+        $legacy = [
+            ['cash_eur', self::CASH_AMOUNT, self::CASH_CURRENCY],
+            ['realized_gains_ytd_override_eur', self::REALIZED_OVERRIDE_AMOUNT, self::REALIZED_OVERRIDE_CURRENCY],
+        ];
+        foreach ($legacy as [$oldKey, $amountKey, $currencyKey]) {
+            if ($this->get($amountKey) === null) {
+                $value = $this->get($oldKey);
+                if ($value !== null && $value !== '') {
+                    $this->set($amountKey, $value);
+                    $this->set($currencyKey, 'EUR');
+                }
+            }
+        }
+        $this->set(self::CURRENCY_MIGRATION, '1');
     }
 }

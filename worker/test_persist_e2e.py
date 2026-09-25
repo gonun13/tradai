@@ -8,7 +8,8 @@ action, never suppress it, and never block on a missing thesis, tracker entry, o
 confidence level. Runs against a scratch copy of the live database.
 
 Also covers the tracker: a name you don't own gets its own choice set, its own
-book label, four lenses, and no loss gate.
+book label, the five lenses, and no loss gate. And carry-forward (0027): an unchanged
+subject's rows are copied exactly, marked with the deciding run, and never alert.
 
 Run: docker compose exec worker python test_persist_e2e.py
 """
@@ -21,7 +22,7 @@ import shutil
 import sys
 import tempfile
 
-from advisory import AdvisoryService, HORIZONS_BY_BOOK, horizons_for
+from advisory import AdvisoryService, HORIZONS_BY_BOOK, LENSES, horizons_for
 
 SRC = os.environ.get("TRADAI_DATA_DIR", "/data") + "/tradai.sqlite"
 
@@ -62,10 +63,13 @@ def run_case(name, *, choices, realized_gains=0.0, expect_action, expect_reason=
 
     svc = AdvisoryService(path)
     conn = svc.connect()
-    conn.execute(
-        "INSERT INTO settings (key, value, updated_at) VALUES ('realized_gains_ytd_override_eur', ?, 'x')"
+    conn.executemany(
+        "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, 'x')"
         " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        (str(realized_gains),),
+        [
+            ("realized_gains_ytd_override_amount", str(realized_gains)),
+            ("realized_gains_ytd_override_currency", "EUR"),
+        ],
     )
     conn.execute("DELETE FROM realized_disposals")  # scratch copy would double-count vs the override
     conn.commit()
@@ -84,7 +88,7 @@ def run_case(name, *, choices, realized_gains=0.0, expect_action, expect_reason=
 
     # Every lens answers for every subject it is asked about.
     lens_answers = {}
-    for lens in ("thesis", "news", "technicals", "combined"):
+    for lens in LENSES:
         per_lens = {}
         for s_ in svc._subjects(context, lens=lens):
             default = "keep_watching" if s_.get("book") == "tracker" else "hold"
@@ -108,7 +112,7 @@ def run_case(name, *, choices, realized_gains=0.0, expect_action, expect_reason=
     # whichever set this book uses ('12m' for portfolio, '3m' for tracker).
     mid_horizon = horizons_for(book)[1]
     row = conn.execute(
-        "SELECT action, reason, loss_gate, suppressed, book, jev_lenses_json FROM recommendations"
+        "SELECT action, reason, loss_gate, suppressed, book, jev_lenses_json, explanation FROM recommendations"
         " WHERE agent_run_id = ? AND instrument_id = ? AND horizon = ?",
         (run_id, iid, mid_horizon),
     ).fetchone()
@@ -133,6 +137,9 @@ def run_case(name, *, choices, realized_gains=0.0, expect_action, expect_reason=
         print(f"  FAIL {name}: gate {row['loss_gate']!r} != {expect_gate!r}"); ok = False
     if row["book"] != book:
         print(f"  FAIL {name}: book {row['book']!r} != {book!r}"); ok = False
+    # 0028: no explanation (Claude skipped or failed) never stops the decision persisting.
+    if row["explanation"] is not None:
+        print(f"  FAIL {name}: unexpected explanation {row['explanation']!r}"); ok = False
     # 0020: check persisted rows against the decision, not HORIZONS_BY_BOOK used
     # to construct the inputs above, so a wrong production map cannot pass itself.
     expected_horizons = {"portfolio": {"6m", "12m", "24m"}, "tracker": {"1m", "3m", "6m"}}[book]
@@ -178,10 +185,10 @@ results = [
              expect_action="sell", expect_gate=None),
 
     run_case("hold passes through", choices={h: "hold" for h in HORIZONS_BY_BOOK["portfolio"]}, expect_action="hold",
-             expect_lenses=["thesis", "news", "technicals", "combined"]),
+             expect_lenses=list(LENSES)),
 ]
 
-print("\nTracker — a name you don't own, its own verbs, four lenses, no loss gate\n")
+print("\nTracker — a name you don't own, its own verbs, five lenses, no loss gate\n")
 results += [
     run_case("buy_now becomes buy/entry_now and is labelled tracker",
              symbol=TRACKED_SYMBOL, book="tracker",
@@ -206,12 +213,12 @@ results += [
              choices={h: "drop_lost_interest" for h in HORIZONS_BY_BOOK["tracker"]},
              expect_action="drop", expect_reason="lost_interest"),
 
-    # 0022: Tracker recommendations persist the real news lens too.
-    run_case("tracker rows carry all four evidence lenses",
+    # 0022/0027: Tracker recommendations persist every layer lens, news included.
+    run_case("tracker rows carry all five lenses",
              symbol=TRACKED_SYMBOL, book="tracker",
              choices={h: "keep_watching" for h in HORIZONS_BY_BOOK["tracker"]},
              expect_action="watch",
-             expect_lenses=["thesis", "news", "technicals", "combined"]),
+             expect_lenses=list(LENSES)),
 
     # A holding's verbs are meaningless here; an unmapped choice must fall back safely
     # rather than write a portfolio reason onto a tracker row.
@@ -220,6 +227,93 @@ results += [
              choices={h: "sell_thesis_broken" for h in HORIZONS_BY_BOOK["tracker"]},
              expect_action="watch", expect_reason="insufficient_evidence"),
 ]
+
+
+
+def carry_case():
+    """0027: a carried subject keeps Jev's exact decision, names its deciding run, and is silent."""
+    name = "carried rows copy the decision and explanation, point at the deciding run, and never alert"
+    tmp = tempfile.mkdtemp()
+    path = os.path.join(tmp, "t.sqlite")
+    shutil.copy(SRC, path)
+    svc = AdvisoryService(path)
+    conn = svc.connect()
+    conn.execute("DELETE FROM tracker")
+    conn.commit()
+
+    context = svc._build_context(conn)
+    target = next(s for s in svc._subjects(context) if s["symbol"] == "DDD")
+    iid = int(target["instrument_id"])
+    lens_answers = {lens: {} for lens in LENSES}
+    for s_ in svc._subjects(context):
+        for hz in horizons_for("portfolio"):
+            choice = "buy_new_conviction" if int(s_["instrument_id"]) == iid else "hold"
+            for lens in LENSES:
+                lens_answers[lens][f"{int(s_['instrument_id'])}_{hz}"] = answer(choice)
+
+    def new_run():
+        cur = conn.execute(
+            "INSERT INTO agent_runs (trigger_kind, status, started_at) VALUES ('manual', 'running', 'now')"
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+    first = new_run()
+    explained = {
+        "market_read": "Markets calm.",
+        "by_symbol": {"DDD": {"text": "Bought on new evidence.", "tension": "Technicals disagree."}},
+    }
+    svc._persist_recommendations(
+        conn, first, context, {}, lens_answers, lens_answers["combined"], {}, log=[],
+        explanations=explained,
+    )
+    rows = conn.execute(
+        "SELECT * FROM recommendations WHERE agent_run_id = ? AND instrument_id = ?", (first, iid)
+    ).fetchall()
+    second = new_run()
+    prior = {"record": {"decided_run_id": first, "decided_at": "2026-09-24"}, "rows": rows, "run_id": first}
+    carried = svc._carry_forward_all(conn, second, context, {iid: prior}, [iid])
+    svc._raise_alerts_for_run(conn, second)
+    got = conn.execute(
+        "SELECT action, reason, carried_from_run_id, conversation_json, explanation FROM recommendations"
+        " WHERE agent_run_id = ? AND instrument_id = ? ORDER BY horizon",
+        (second, iid),
+    ).fetchall()
+    first_alerts = conn.execute(
+        "SELECT COUNT(*) FROM alerts a JOIN recommendations r ON r.id = a.recommendation_id"
+        " WHERE r.agent_run_id = ?", (first,),
+    ).fetchone()[0]
+    second_alerts = conn.execute(
+        "SELECT COUNT(*) FROM alerts a JOIN recommendations r ON r.id = a.recommendation_id"
+        " WHERE r.agent_run_id = ?", (second,),
+    ).fetchone()[0]
+    conn.close()
+    shutil.rmtree(tmp, ignore_errors=True)
+
+    ok = True
+    if carried != 3 or len(got) != 3:
+        print(f"  FAIL {name}: carried {carried} rows, read back {len(got)}"); ok = False
+    if any(r["action"] != "buy" or r["reason"] != "new_conviction" for r in got):
+        print(f"  FAIL {name}: carried action changed {[tuple(r)[:2] for r in got]}"); ok = False
+    if any(r["carried_from_run_id"] != first for r in got):
+        print(f"  FAIL {name}: carried_from_run_id not the deciding run"); ok = False
+    if any(json.loads(r["conversation_json"])[-1].get("kind") != "carried" for r in got):
+        print(f"  FAIL {name}: conversation not marked carried"); ok = False
+    # 0028: one explanation on every horizon row, kept when carried, and in the transcript.
+    want = {"text": "Bought on new evidence.", "tension": "Technicals disagree.", "market_read": "Markets calm."}
+    if any(json.loads(r["explanation"] or "null") != want for r in list(rows) + list(got)):
+        print(f"  FAIL {name}: explanation not on every row / not carried"); ok = False
+    if not any(t.get("kind") == "explanation" for t in json.loads(got[0]["conversation_json"])):
+        print(f"  FAIL {name}: explanation turn missing from the transcript"); ok = False
+    if first_alerts == 0 or second_alerts != 0:
+        print(f"  FAIL {name}: alerts first={first_alerts} carried={second_alerts}"); ok = False
+    if ok:
+        print(f"  ok  {name}")
+    return ok
+
+
+print("\nCarry-forward (0027)\n")
+results.append(carry_case())
 
 print()
 if all(results):

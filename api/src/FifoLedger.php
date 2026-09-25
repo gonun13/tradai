@@ -12,7 +12,7 @@ namespace Tradai\Api;
  * lots first. Commission is capitalised into buy cost and netted out of sell proceeds
  * (0007 already treats cost basis as including commission).
  *
- * Amounts are in the instrument's native currency; FX to EUR happens at read time.
+ * Amounts are in the instrument's native currency; display conversion happens at read time.
  */
 final class FifoLedger
 {

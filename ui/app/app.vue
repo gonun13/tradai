@@ -341,12 +341,14 @@ th, td {
 /* 0019: tracker-only — stop spending attention on a name never owned. */
 .pill[data-action="drop"] { border-color: var(--mute); color: var(--mute); }
 
-.info-needs {
+.info-needs,
+.market-read {
   margin: 0.75rem 0 1rem;
   padding: 0.75rem;
   border: 1px dashed var(--line);
 }
-.info-needs h2 { margin: 0 0 0.5rem; font-size: 1rem; }
+.info-needs h2,
+.market-read h2 { margin: 0 0 0.5rem; font-size: 1rem; }
 .info-needs ul { margin: 0; padding-left: 1.1rem; }
 .info-needs li { margin: 0.35rem 0; }
 

@@ -10,6 +10,9 @@ Lock advisory roles: Claude researches and builds Jev requests; Jev alone decide
 `ADVISORY_MAX_SCENARIO_ROUNDS=0` by default; the worker accepts values from 0 through 10.
 The portfolio `prices` lens was later replaced by `thesis`, and tracker subjects use `thesis`,
 `technicals`, and `combined` with tracker-specific choices (`0013`, `0019`).
+`0027` then aligned the lenses with the ingestion layers — `historical`, `fundamentals` (which
+absorbed `thesis`), `technicals`, `news`, then `combined` for both books — and added materiality-gated
+carry-forward.
 The original decision bullets below are retained as history; the current behavior is defined by
 the implementation note and the later decisions.
 

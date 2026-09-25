@@ -37,9 +37,11 @@ Audience: product / planning. Concepts, rules, and invariants for Tradai.
   removed the gate; `doctrine.py` labels the result for the log and changes nothing. Tracker rows carry no gate at
   all, having no position to be at a loss on.
 - **Role of Claude Agent CLI:** **researcher** — ingests book/market context, explores scenarios, builds Jev requests, writes research, emits info-needs for ingest planning (subscription auth)
-- **Role of Jev:** **decider** — one typed choice per subject x horizon, with confidence; lenses `thesis` | `news` |
-  `technicals` | `combined` (`0013` replaced `prices` with `thesis`); canonical displayed action = **combined**.
-  Both books get all four lenses; `0022` restored Tracker news.
+- **Role of Jev:** **decider** — one typed choice per subject x horizon, with confidence; lenses follow the
+  ingestion layers — `historical` | `fundamentals` | `technicals` | `news`, then `combined` (`0027`; the `0013`
+  `thesis` lens folded into `fundamentals`); canonical displayed action = **combined**. Both books get all five.
+- **Carry-forward (`0027`):** a subject whose layer cards show no material change since its last real
+  decision keeps that recommendation, marked with the deciding run; carried rows never alert.
 - **Claude↔Jev dialogue:** bounded back-and-forth; per-instrument transcript shown via UI log icon
 - **Human in the loop:** Tradai never places orders; the operator executes elsewhere
 
@@ -59,13 +61,13 @@ See `decisions/0009-claude-researcher-jev-decider.md`.
 4. **Advisory-only** — recommendations and alerts inform; they do not execute.
 5. **Privacy / agent context:**
    - Portfolio authority remains local SQLite / LAN — no cloud DB, no public hosting of holdings.
-   - **Agents receive full portfolio context** needed for good decisions: holdings (quantities, cost basis), weights / concentration, P&L, and EUR totals, plus tickers/ISINs, OHLCV, technicals, and news.
+   - **Agents receive full portfolio context** needed for good decisions: holdings (quantities, cost basis), weights / concentration, P&L, and totals in the snapshotted display currency, plus tickers/ISINs, OHLCV, technicals, and news.
    - This is intentional personal-use tradeoff: richer advice vs ticker-only privacy. Do not strip position data, fundamentals, or Tracker news from Claude / Jev payloads by default.
 6. **“Live” monitoring** means polling delayed or near-live quotes — not exchange co-located websockets.
 7. **Agent advisory cadence:** recommendations/alerts from agents refresh **once per day after US markets close** (not continuous intraday advisory). Quote monitoring may still poll during sessions.
 8. **Alerts are in-app first** — no email/SMS/push required for MVP.
 9. **Compliance posture:** personal use; respect each data vendor’s terms (delayed/redistribution limits); not advice to third parties.
-10. **Display currency = EUR** — dashboard portfolio value, cost basis totals, P&L, and other money aggregates are shown in **EUR**. Instrument quote/trading currency may still be USD (or other); convert for display using a rate source (implementation detail). Persist native currency amounts where useful; do not invent a multi-currency UI.
+10. **One configurable display currency (`0025`)** — dashboard converted values and money aggregates use `EUR`, `USD`, `GBP`, or `CHF` (default `EUR`). Instrument/quote and monetary-setting source currencies remain independent native facts. Missing required FX produces an unavailable value and unavailable aggregate, never a relabelled or partial number.
 
 ## Relations (conceptual)
 

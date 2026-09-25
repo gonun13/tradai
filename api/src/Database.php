@@ -104,6 +104,45 @@ final class Database
                 FOREIGN KEY (instrument_id) REFERENCES instruments(id) ON DELETE CASCADE
             );
 
+            -- 0026: adjusted long history is chart-only and never replaces technical bars.
+            CREATE TABLE IF NOT EXISTS historical_series (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                series_key TEXT NOT NULL UNIQUE,
+                series_kind TEXT NOT NULL CHECK (series_kind IN ('instrument', 'benchmark')),
+                instrument_id INTEGER,
+                benchmark_region TEXT CHECK (benchmark_region IS NULL OR benchmark_region IN ('eu', 'us')),
+                symbol TEXT NOT NULL,
+                native_currency TEXT NOT NULL,
+                source TEXT NOT NULL,
+                resolution TEXT NOT NULL,
+                earliest_date TEXT NOT NULL,
+                as_of TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (instrument_id) REFERENCES instruments(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS historical_points (
+                series_id INTEGER NOT NULL,
+                point_date TEXT NOT NULL,
+                adjusted_close REAL NOT NULL,
+                resolution TEXT NOT NULL,
+                PRIMARY KEY (series_id, point_date),
+                FOREIGN KEY (series_id) REFERENCES historical_series(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_historical_points_date
+                ON historical_points (series_id, point_date);
+
+            CREATE TABLE IF NOT EXISTS benchmark_history_state (
+                region TEXT PRIMARY KEY CHECK (region IN ('eu', 'us')),
+                symbol TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_attempt_at TEXT,
+                last_success_at TEXT,
+                next_due_at TEXT,
+                last_error TEXT,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS fx_rates (
                 base_currency TEXT PRIMARY KEY,
                 quote_currency TEXT NOT NULL,
@@ -308,6 +347,10 @@ final class Database
         self::ensureDoctrineRecommendationSchema($pdo);
         self::ensureTrackerRecommendationSchema($pdo);
         self::ensureTrackerHorizonSchema($pdo);
+        // 0027: after the table rebuilds above, which copy a fixed column list.
+        self::ensureColumn($pdo, 'recommendations', 'carried_from_run_id', 'INTEGER');
+        // 0028: Claude's plain-language explanation, JSON {text, tension, market_read}.
+        self::ensureColumn($pdo, 'recommendations', 'explanation', 'TEXT');
         self::ensureTrackerInstruments($pdo);
         self::ensureProfileSplit($pdo);
         self::ensureColumn($pdo, 'holdings', 'first_trade_date', 'TEXT');

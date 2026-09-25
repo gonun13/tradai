@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+import math
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable
 
 from adapters.base import CandidateResult
+from adapters import HistoricalPoint, LongHistory
 
 BARS_REQUIRED = 127
 TECHNICAL_FIELDS = (
@@ -52,6 +54,81 @@ def evaluate_bars(provider: str, bars: Iterable[Any]) -> CandidateResult:
     score = round(close_score * 0.8 + (ohlcv / field_total) * 0.2, 4)
     as_of = str(_value(normalized[-1], "bar_date") or "") if normalized else None
     return CandidateResult(provider, normalized, not missing, score, missing, as_of)
+
+
+def compact_long_history(points: Iterable[Any]) -> list[HistoricalPoint]:
+    """Keep daily/weekly/monthly adjusted closes at 1y and 5y calendar boundaries."""
+    valid: dict[date, float] = {}
+    for point in points:
+        try:
+            point_date = date.fromisoformat(str(_value(point, "point_date") or ""))
+            value = float(_value(point, "adjusted_close"))
+        except (TypeError, ValueError):
+            continue
+        if value > 0 and math.isfinite(value):
+            valid[point_date] = value
+    if not valid:
+        return []
+
+    latest = max(valid)
+    one_year = _years_before(latest, 1)
+    five_years = _years_before(latest, 5)
+    selected: dict[date, str] = {}
+    weekly: dict[tuple[int, int], date] = {}
+    monthly: dict[tuple[int, int], date] = {}
+    for point_date in sorted(valid):
+        if point_date >= one_year:
+            selected[point_date] = "daily"
+        elif point_date >= five_years:
+            iso = point_date.isocalendar()
+            weekly[(iso.year, iso.week)] = point_date
+        else:
+            monthly[(point_date.year, point_date.month)] = point_date
+    selected.update({point_date: "weekly" for point_date in weekly.values()})
+    selected.update({point_date: "monthly" for point_date in monthly.values()})
+    return [
+        HistoricalPoint(point_date.isoformat(), valid[point_date], selected[point_date])
+        for point_date in sorted(selected)
+    ]
+
+
+def evaluate_long_history(provider: str, history: LongHistory) -> CandidateResult:
+    compacted = compact_long_history(history.points)
+    missing: list[str] = []
+    if len(compacted) < 2:
+        missing.append(f"adjusted_closes:{len(compacted)}/2")
+    as_of = compacted[-1].point_date if compacted else None
+    payload = LongHistory(compacted, str(history.currency or "").upper(), as_of)
+    return CandidateResult(
+        provider, payload, not missing, 1.0 if not missing else len(compacted) / 2,
+        missing, as_of,
+    )
+
+
+def long_history_cache_wins(
+    existing_earliest: str | None,
+    existing_as_of: str | None,
+    candidate: CandidateResult,
+) -> bool:
+    """Reject a response that truncates either edge of an already accepted full history."""
+    payload = candidate.payload
+    points = getattr(payload, "points", [])
+    if not candidate.complete or not points:
+        return existing_earliest is not None
+    candidate_earliest = str(points[0].point_date)
+    candidate_latest = str(points[-1].point_date)
+    return bool(
+        existing_earliest
+        and existing_as_of
+        and (candidate_earliest > existing_earliest or candidate_latest < existing_as_of)
+    )
+
+
+def _years_before(value: date, years: int) -> date:
+    try:
+        return value.replace(year=value.year - years)
+    except ValueError:  # 29 February -> 28 February.
+        return value.replace(year=value.year - years, day=28)
 
 
 def evaluate_fundamentals(provider: str, payload: dict[str, Any], kind: str) -> CandidateResult:

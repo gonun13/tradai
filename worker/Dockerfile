@@ -12,10 +12,11 @@ COPY requirements.txt requirements.lock ./
 RUN pip install --no-cache-dir -r requirements.lock
 
 COPY adapters ./adapters
-COPY refresh.py ingestion.py main.py technicals.py advisory.py schedule.py doctrine.py ./
-COPY test_doctrine.py test_fundamentals_adapters.py test_ingestion.py test_persist_e2e.py ./
+COPY refresh.py ingestion.py main.py technicals.py advisory.py schedule.py doctrine.py digest.py materiality.py ./
+COPY test_doctrine.py test_currency.py test_fundamentals_adapters.py test_ingestion.py test_persist_e2e.py \
+     test_digest.py test_materiality.py test_advisory_budget.py test_explain.py ./
 
-# Claude CLI refuses --dangerously-skip-permissions as root; run it as this user.
+# Claude CLI runs as this user, with its own home for onboarding state.
 # Worker process stays root so shared /data SQLite stays writable with the API.
 RUN useradd --create-home --uid 1000 --shell /bin/bash tradai \
   && printf '%s\n' '{"hasCompletedOnboarding":true,"hasTrustDialogAccepted":true}' \

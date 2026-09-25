@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import type { PortfolioSettings, SetupKeys } from '~/composables/useHoldingsApi'
+import type { DisplayCurrency, PortfolioSettings, SetupKeys } from '~/composables/useHoldingsApi'
 
 const api = useHoldingsApi()
+const { moneyOrDash } = useFormat()
 
 const { data, pending, refresh, error } = await useAsyncData('setup-status', () => api.setupStatus())
 
@@ -10,7 +11,15 @@ const investorText = ref('')
 const portfolioText = ref('')
 const cashInput = ref('')
 const realizedInput = ref('')
+const displayCurrency = ref<DisplayCurrency>('EUR')
+const cashCurrency = ref<DisplayCurrency>('EUR')
+const realizedCurrency = ref<DisplayCurrency>('EUR')
 const profilesLoading = ref(true)
+const currencyLoading = ref(true)
+
+const currencyMessage = ref('')
+const currencyError = ref('')
+const currencyBusy = ref(false)
 
 const portfolioMessage = ref('')
 const portfolioError = ref('')
@@ -21,30 +30,56 @@ const trackerBusy = ref(false)
 
 async function loadProfiles() {
   profilesLoading.value = true
+  currencyLoading.value = true
+  currencyError.value = ''
   portfolioError.value = ''
   trackerError.value = ''
 
   try {
     const res = await api.getSettings()
     settings.value = res.settings
+    displayCurrency.value = res.settings.display_currency
     investorText.value = res.settings.investor_profile_text ?? ''
     portfolioText.value = res.settings.portfolio_profile_text ?? ''
-    cashInput.value = res.settings.cash_eur === null ? '' : String(res.settings.cash_eur)
+    cashInput.value = res.settings.cash.amount === null ? '' : String(res.settings.cash.amount)
+    cashCurrency.value = res.settings.cash.currency ?? res.settings.display_currency
     realizedInput.value =
-      res.settings.realized_gains_ytd_override_eur === null
+      res.settings.realized_gains_ytd_override.amount === null
         ? ''
-        : String(res.settings.realized_gains_ytd_override_eur)
+        : String(res.settings.realized_gains_ytd_override.amount)
+    realizedCurrency.value =
+      res.settings.realized_gains_ytd_override.currency ?? res.settings.display_currency
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
     portfolioError.value = message
     trackerError.value = message
+    currencyError.value = message
   } finally {
     profilesLoading.value = false
+    currencyLoading.value = false
   }
 }
 
 function optionalNumber(value: string) {
   return value === '' ? null : Number(value)
+}
+
+async function saveCurrency() {
+  currencyBusy.value = true
+  currencyMessage.value = ''
+  currencyError.value = ''
+  try {
+    const previous = settings.value?.display_currency
+    const res = await api.saveSettings({ display_currency: displayCurrency.value })
+    settings.value = res.settings
+    if (!cashInput.value && cashCurrency.value === previous) cashCurrency.value = displayCurrency.value
+    if (!realizedInput.value && realizedCurrency.value === previous) realizedCurrency.value = displayCurrency.value
+    currencyMessage.value = `Display currency changed to ${displayCurrency.value}.`
+  } catch (e) {
+    currencyError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    currencyBusy.value = false
+  }
 }
 
 async function savePortfolio() {
@@ -55,8 +90,12 @@ async function savePortfolio() {
   try {
     const res = await api.saveSettings({
       portfolio_profile_text: portfolioText.value,
-      cash_eur: optionalNumber(cashInput.value),
-      realized_gains_ytd_override_eur: optionalNumber(realizedInput.value),
+      cash: cashInput.value === '' ? null : {
+        amount: optionalNumber(cashInput.value)!, currency: cashCurrency.value,
+      },
+      realized_gains_ytd_override: realizedInput.value === '' ? null : {
+        amount: optionalNumber(realizedInput.value)!, currency: realizedCurrency.value,
+      },
     })
     settings.value = res.settings
     portfolioMessage.value = 'Portfolio saved for the next advisory run.'
@@ -183,31 +222,29 @@ function serviceTone(status: ServiceStatus) {
 
           <div class="money-fields">
             <label>
-              Cash reserve (EUR)
-              <input
-                v-model="cashInput"
-                type="number"
-                step="0.01"
-                :disabled="profilesLoading || portfolioBusy"
-                placeholder="0.00"
-              >
+              Cash reserve
+              <span class="money-input">
+                <input v-model="cashInput" type="number" step="0.01" aria-label="Cash reserve amount" :disabled="profilesLoading || portfolioBusy" placeholder="0.00">
+                <select v-model="cashCurrency" aria-label="Cash reserve currency" :disabled="profilesLoading || portfolioBusy">
+                  <option v-for="code in settings?.display_currency_options ?? ['EUR', 'USD', 'GBP', 'CHF']" :key="code" :value="code">{{ code }}</option>
+                </select>
+              </span>
             </label>
             <label>
-              Realised gains elsewhere (EUR)
-              <input
-                v-model="realizedInput"
-                type="number"
-                step="0.01"
-                :disabled="profilesLoading || portfolioBusy"
-                placeholder="0.00"
-              >
+              Realised gains elsewhere
+              <span class="money-input">
+                <input v-model="realizedInput" type="number" step="0.01" aria-label="Realised gains elsewhere amount" :disabled="profilesLoading || portfolioBusy" placeholder="0.00">
+                <select v-model="realizedCurrency" aria-label="Realised gains elsewhere currency" :disabled="profilesLoading || portfolioBusy">
+                  <option v-for="code in settings?.display_currency_options ?? ['EUR', 'USD', 'GBP', 'CHF']" :key="code" :value="code">{{ code }}</option>
+                </select>
+              </span>
             </label>
           </div>
 
           <div class="realised-total" aria-live="polite">
             <span>Calculated realised total</span>
             <strong v-if="settings">
-              {{ settings.realized_gains_ytd_eur }} €
+              {{ settings.realized_gains_ytd_display == null ? 'pending FX' : moneyOrDash(settings.realized_gains_ytd_display, settings.display_currency) }}
               <small>{{ settings.calendar_year }}</small>
             </strong>
             <strong v-else>—</strong>
@@ -260,6 +297,30 @@ function serviceTone(status: ServiceStatus) {
         </form>
       </section>
     </div>
+
+    <section class="currency-panel" aria-labelledby="currency-setup-title">
+      <div class="currency-copy">
+        <p class="setup-kicker">Global presentation</p>
+        <h2 id="currency-setup-title">Display currency</h2>
+        <p>Converted values, totals, and new advisory runs use this currency. Native market data is unchanged.</p>
+      </div>
+      <form class="currency-form" @submit.prevent="saveCurrency">
+        <label>
+          Currency
+          <select v-model="displayCurrency" :disabled="currencyLoading || currencyBusy">
+            <option v-for="code in settings?.display_currency_options ?? ['EUR', 'USD', 'GBP', 'CHF']" :key="code" :value="code">
+              {{ code }}
+            </option>
+          </select>
+        </label>
+        <button type="submit" :disabled="currencyLoading || currencyBusy">
+          {{ currencyBusy ? 'Saving…' : 'Save' }}
+        </button>
+        <p v-if="currencyLoading" class="form-state currency-feedback" role="status">Loading display currency…</p>
+        <p v-if="currencyMessage" class="form-state success currency-feedback" role="status">{{ currencyMessage }}</p>
+        <p v-if="currencyError" class="form-state failure currency-feedback" role="alert">{{ currencyError }}</p>
+      </form>
+    </section>
 
     <section class="service-panel" aria-labelledby="service-status-title">
       <div class="service-heading">
@@ -412,9 +473,66 @@ function serviceTone(status: ServiceStatus) {
 }
 
 .book-form textarea,
-.book-form input {
+.book-form input,
+.book-form select {
   width: 100%;
   border-color: var(--card-line);
+}
+
+.currency-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1.5rem;
+  max-width: 60rem;
+  margin: 2rem auto 0;
+  padding: 1rem 1.2rem;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.currency-copy h2 {
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+.currency-copy > p:last-child {
+  margin: 0.35rem 0 0;
+  color: var(--mute);
+  line-height: 1.4;
+}
+
+.currency-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: flex-end;
+  gap: 0.65rem;
+}
+
+.currency-form label {
+  min-width: 7rem;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.currency-form select {
+  width: 100%;
+}
+
+.currency-form button {
+  white-space: nowrap;
+}
+
+.currency-feedback {
+  flex-basis: 100%;
+  padding: 0.45rem 0.6rem;
+}
+
+.money-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
 }
 
 .book-form textarea {
@@ -575,6 +693,15 @@ function serviceTone(status: ServiceStatus) {
     grid-template-columns: 1fr;
   }
 
+  .currency-panel {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+
+  .currency-form {
+    justify-content: flex-start;
+  }
+
   .book-card-heading > p:last-child,
   .field-hint {
     min-height: 0;
@@ -601,6 +728,10 @@ function serviceTone(status: ServiceStatus) {
 
   .service-state {
     text-align: left;
+  }
+
+  .currency-form label {
+    flex: 1;
   }
 }
 </style>

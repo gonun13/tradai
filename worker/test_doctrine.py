@@ -37,11 +37,11 @@ print("\nloss-gate label — informational only, never blocks anything")
 NO_GAINS = {"6m": "sell", "12m": "sell", "24m": "sell"}
 SHORT_ONLY = {"6m": "sell", "12m": "sell", "24m": "hold"}
 
-assert doctrine.label_loss_gate(pnl_pct=5.0, realized_gains_ytd_eur=0, horizon_choices=NO_GAINS) == "not_at_loss"
-assert doctrine.label_loss_gate(pnl_pct=-10.0, realized_gains_ytd_eur=500, horizon_choices=NO_GAINS) == "offset_same_year"
-assert doctrine.label_loss_gate(pnl_pct=-10.0, realized_gains_ytd_eur=0, horizon_choices=NO_GAINS) == "no_recovery_24m"
-assert doctrine.label_loss_gate(pnl_pct=-10.0, realized_gains_ytd_eur=0, horizon_choices=SHORT_ONLY) is None
-assert doctrine.label_loss_gate(pnl_pct=None, realized_gains_ytd_eur=0, horizon_choices=NO_GAINS) is None
+assert doctrine.label_loss_gate(pnl_pct=5.0, realized_gains_ytd_display=0, horizon_choices=NO_GAINS) == "not_at_loss"
+assert doctrine.label_loss_gate(pnl_pct=-10.0, realized_gains_ytd_display=500, horizon_choices=NO_GAINS) == "offset_same_year"
+assert doctrine.label_loss_gate(pnl_pct=-10.0, realized_gains_ytd_display=0, horizon_choices=NO_GAINS) == "no_recovery_24m"
+assert doctrine.label_loss_gate(pnl_pct=-10.0, realized_gains_ytd_display=0, horizon_choices=SHORT_ONLY) is None
+assert doctrine.label_loss_gate(pnl_pct=None, realized_gains_ytd_display=0, horizon_choices=NO_GAINS) is None
 print("  ok")
 
 print("\nprofile defaults are non-empty fallbacks for an operator who hasn't written one yet")

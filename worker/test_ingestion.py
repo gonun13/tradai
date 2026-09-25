@@ -7,32 +7,36 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
-from adapters import Bar, Quote
+from adapters import Bar, HistoricalPoint, LongHistory, Quote
 from adapters.base import AdapterMetadata, RatePolicy, select_first_complete
 from adapters.errors import AdapterTransientError
 from adapters.marketaux import MarketauxNewsAdapter, NewsHeadline
 from adapters.rate_state import PersistentRateLimiter
 from ingestion import (
     cache_wins,
+    compact_long_history,
     evaluate_bars,
     evaluate_fundamentals,
+    evaluate_long_history,
     evaluate_news,
     evaluate_quote,
     evaluate_technicals,
+    long_history_cache_wins,
 )
 from refresh import MarketRefreshService
 
 
 class FakeAdapter:
     def __init__(self, provider: str, *, enabled: bool = True, quote=None, bars=None,
-                 fundamentals=None, news=None, regions=None, kinds=None) -> None:
+                 long_history=None, fundamentals=None, news=None, regions=None, kinds=None) -> None:
         self.provider = provider
         self.is_enabled = enabled
         self.quote = quote
         self.bars = bars or []
+        self.long_history = long_history
         self.fundamentals = fundamentals or {}
         self.news = news or []
-        self.calls = {"quote": 0, "bars": 0, "fundamentals": 0, "news": 0}
+        self.calls = {"quote": 0, "bars": 0, "long_history": 0, "fundamentals": 0, "news": 0}
         self.last_response_headers = {}
         self.regions = frozenset(regions or {"us", "eu"})
         self.kinds = frozenset(kinds or {"equity", "etf"})
@@ -62,6 +66,19 @@ class FakeAdapter:
             raise value
         return value
 
+    def get_long_history(self, symbol, currency):
+        self.calls["long_history"] += 1
+        value = self._resolve(self.long_history, symbol)
+        if isinstance(value, Exception):
+            raise value
+        if value is not None:
+            return value
+        bars = self._resolve(self.bars, symbol)
+        return LongHistory(
+            [HistoricalPoint(bar.bar_date, bar.close) for bar in bars], currency,
+            bars[-1].bar_date if bars else None,
+        )
+
     def get_fundamentals(self, symbol, kind, mic=None):
         self.calls["fundamentals"] += 1
         value = self._resolve(self.fundamentals, symbol)
@@ -78,6 +95,40 @@ class FakeAdapter:
 
 
 class ContractTests(unittest.TestCase):
+    def test_long_history_validation_compaction_and_cache_protection(self):
+        latest = datetime(2026, 9, 25, tzinfo=timezone.utc).date()
+        points = []
+        for offset in range(0, 8 * 366):
+            day = latest - timedelta(days=offset)
+            if day.weekday() < 5:
+                points.append(HistoricalPoint(day.isoformat(), 100 + offset / 10))
+        points.extend([
+            HistoricalPoint(latest.isoformat(), 123.0),  # last duplicate wins
+            HistoricalPoint("bad-date", 1),
+            HistoricalPoint("2020-01-01", float("nan")),
+            HistoricalPoint("2020-01-02", -1),
+        ])
+        compacted = compact_long_history(points)
+        self.assertEqual(latest.isoformat(), compacted[-1].point_date)
+        self.assertEqual(123.0, compacted[-1].adjusted_close)
+        recent = [p for p in compacted if p.point_date >= "2025-09-25"]
+        middle = [p for p in compacted if "2021-09-25" <= p.point_date < "2025-09-25"]
+        old = [p for p in compacted if p.point_date < "2021-09-25"]
+        self.assertTrue(recent and all(p.resolution == "daily" for p in recent))
+        self.assertTrue(middle and all(p.resolution == "weekly" for p in middle))
+        self.assertTrue(old and all(p.resolution == "monthly" for p in old))
+        self.assertEqual(len(compacted), len({p.point_date for p in compacted}))
+
+        candidate = evaluate_long_history("yfinance", LongHistory(points, "USD", None))
+        self.assertTrue(candidate.complete)
+        self.assertFalse(long_history_cache_wins("2019-01-01", "2026-09-24", candidate))
+        self.assertTrue(long_history_cache_wins("2010-01-01", "2026-09-24", candidate))
+        incomplete = evaluate_long_history(
+            "yfinance", LongHistory([HistoricalPoint("2026-09-25", 1)], "USD", None)
+        )
+        self.assertFalse(incomplete.complete)
+        self.assertTrue(long_history_cache_wins("2020-01-01", "2026-09-24", incomplete))
+
     def test_completeness_contracts(self):
         now = datetime.now(timezone.utc).isoformat()
         self.assertTrue(evaluate_quote("a", Quote(10, "USD", now, "a")).complete)
@@ -296,13 +347,13 @@ class PersistenceTests(unittest.TestCase):
             conn,
             instruments,
             {operation: set() for operation in (
-                "quote", "bars", "fundamentals", "technicals", "news"
+                "quote", "bars", "long_history", "fundamentals", "technicals", "news"
             )},
         )
         conn.close()
 
         self.assertEqual("instrument_datasets", statistics["unit"])
-        self.assertEqual(2, statistics["layers"]["historical"]["missing"])
+        self.assertEqual(3, statistics["layers"]["historical"]["missing"])
         for layer in ("fundamentals", "technicals", "news"):
             self.assertEqual(
                 {"ingested": 0, "from_cache": 0, "missing": 1},
@@ -351,15 +402,16 @@ class PersistenceTests(unittest.TestCase):
         service = Service(self.path)
         first_report = service.refresh()
         self.assertEqual(
-            {"quote": 1, "bars": 1, "fundamentals": 1, "news": 1}, adapter.calls
+            {"quote": 1, "bars": 1, "long_history": 2, "fundamentals": 1, "news": 1}, adapter.calls
         )
         self.assertEqual(
             {
                 "historical": {
-                    "ingested": 2, "from_cache": 0, "missing": 0,
+                    "ingested": 3, "from_cache": 0, "missing": 0,
                     "operations": {
                         "quote": {"ingested": 1, "from_cache": 0, "missing": 0},
                         "bars": {"ingested": 1, "from_cache": 0, "missing": 0},
+                        "long_history": {"ingested": 1, "from_cache": 0, "missing": 0},
                     },
                 },
                 "fundamentals": {"ingested": 1, "from_cache": 0, "missing": 0},
@@ -403,6 +455,80 @@ class PersistenceTests(unittest.TestCase):
         }
         self.assertEqual({"fake"}, sources)
         conn.close()
+
+    def test_long_history_weekly_cache_and_benchmark_failure_are_isolated(self):
+        conn = sqlite3.connect(self.path)
+        conn.executescript(
+            """
+            CREATE TABLE instruments (
+                id INTEGER PRIMARY KEY, symbol TEXT, currency TEXT, region TEXT, name TEXT,
+                kind TEXT, isin TEXT, mic TEXT
+            );
+            CREATE TABLE holdings (instrument_id INTEGER);
+            CREATE TABLE tracker (instrument_id INTEGER, archived_at TEXT);
+            INSERT INTO instruments VALUES (1, 'TEST', 'USD', 'us', 'Test', 'equity', NULL, NULL);
+            INSERT INTO holdings VALUES (1);
+            """
+        )
+        conn.close()
+        now = datetime.now(timezone.utc)
+        bars = [
+            Bar((now.date() - timedelta(days=130-i)).isoformat(), 1, 2, .5, float(i + 1), 10, "fake")
+            for i in range(130)
+        ]
+        full_points = [
+            HistoricalPoint((now.date() - timedelta(days=days)).isoformat(), value)
+            for days, value in ((2200, 50), (1400, 70), (300, 90), (0, 100))
+        ]
+        adapter = FakeAdapter(
+            "fake", quote=Quote(10, "USD", now.isoformat(), "fake"), bars=bars,
+            long_history=LongHistory(full_points, "USD", full_points[-1].point_date),
+        )
+
+        class Service(MarketRefreshService):
+            def _historical_registry(self, region): return [adapter]
+            def _fundamentals_registry(self, region, kind): return []
+            def _news_registry(self, region): return []
+
+        service = Service(self.path)
+        first = service.refresh()
+        self.assertEqual("ingested", first["benchmark_history"]["us"]["status"])
+        self.assertEqual(2, adapter.calls["long_history"])
+        cached = service.refresh()
+        self.assertEqual("from_cache", cached["benchmark_history"]["us"]["status"])
+        self.assertEqual(2, adapter.calls["long_history"])
+
+        def degraded(symbol):
+            if symbol == "SPY":
+                return AdapterTransientError("benchmark outage")
+            points = full_points[-2:]
+            return LongHistory(points, "USD", points[-1].point_date)
+
+        adapter.long_history = degraded
+        conn = service.connect()
+        before = conn.execute(
+            "SELECT earliest_date FROM historical_series WHERE series_key='instrument:1'"
+        ).fetchone()[0]
+        conn.execute(
+            "UPDATE ingestion_state SET next_due_at='2000-01-01T00:00:00+00:00' "
+            "WHERE operation='long_history'"
+        )
+        conn.execute(
+            "UPDATE benchmark_history_state SET next_due_at='2000-01-01T00:00:00+00:00'"
+        )
+        conn.commit()
+        conn.close()
+
+        degraded_report = service.refresh()
+        conn = service.connect()
+        after = conn.execute(
+            "SELECT earliest_date FROM historical_series WHERE series_key='instrument:1'"
+        ).fetchone()[0]
+        conn.close()
+        self.assertEqual(before, after)
+        self.assertEqual("retained_cache", degraded_report["benchmark_history"]["us"]["status"])
+        self.assertIn("benchmark outage", degraded_report["benchmark_history"]["us"]["error"])
+        self.assertFalse(any("benchmark outage" in error for error in degraded_report["errors"]))
 
     def test_manual_ingest_retries_only_fundamentals_gaps(self):
         conn = sqlite3.connect(self.path)
@@ -665,7 +791,7 @@ class PersistenceTests(unittest.TestCase):
         report = service.refresh()
         self.assertTrue(report["ok"])
         self.assertEqual(
-            {"ingested": 8, "from_cache": 0, "missing": 0},
+            {"ingested": 12, "from_cache": 0, "missing": 0},
             {k: report["statistics"]["layers"]["historical"][k]
              for k in ("ingested", "from_cache", "missing")},
         )
