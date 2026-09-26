@@ -7,7 +7,7 @@ Run: docker compose exec worker python test_doctrine.py
 
 from __future__ import annotations
 
-import doctrine
+from domain import doctrine
 
 print("composite choice parsing")
 assert doctrine.split_choice("sell_thesis_broken") == ("sell", "thesis_broken")

@@ -240,7 +240,7 @@ Still true:
 - No cloud portfolio database; local SQLite remains source of truth
 - Do not log or mirror the full book to unrelated third parties beyond the configured agent/LLM/decision providers
 
-The context blob (`AgentRun.context`, built by `worker/advisory.py::_build_context`) is now a
+The context blob (`AgentRun.context`, built by `worker/services/advisory.py::_build_context`) is now a
 stable, exposed API field. New runs use top-level `display_currency`, `portfolio_market_value_display`,
 `portfolio_cost_display`, `cash_display`, `portfolio_total_display`, `realized_gains_ytd_display`,
 `calendar_year`, `tracker` (compact symbol/name list, renamed from `watchlist` in `0019`),
@@ -266,7 +266,7 @@ run context also stores each subject's `cards`, `decide_ids`, and `fingerprints`
 request characters per lens). The run context also holds `market`: the regional proxy card per region in
 use (`0028`).
 
-`conversation` turns (`worker/advisory.py::_run_lens` / `_run_scenario_round`) have `role`
+`conversation` turns (`worker/services/advisory.py::_run_lens` / `_run_scenario_round`) have `role`
 (`researcher` \| `decider` \| `system`) and `kind` (`lens_request` \| `lens_answer` \|
 `scenario_request` \| `scenario_answer` \| `error` \| `carried` \| `explanation`), plus `lens`/`round`/`at`/`summary`/
 `hypothesis`/`question_hint` and, for answer turns, `answers: { "<horizon>": { action, payload } }`

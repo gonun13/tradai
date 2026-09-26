@@ -11,9 +11,9 @@ import json
 import unittest
 from datetime import date, timedelta
 
-import digest
-import doctrine
-from advisory import AdvisoryService, LENSES
+from domain import digest
+from domain import doctrine
+from services.advisory import AdvisoryService, LENSES
 
 # Worst case: this fixture hits every cap (thesis, falsifiers, four news items with
 # snippets, long profiles) and every subject is being decided. Before 0027 a lighter real

@@ -7,8 +7,8 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import Mock
 
-from advisory import AdvisoryService
-from refresh import MarketRefreshService
+from services.advisory import AdvisoryService
+from services.refresh import MarketRefreshService
 
 
 SCHEMA = """

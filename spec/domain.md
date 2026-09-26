@@ -34,7 +34,7 @@ Audience: product / planning. Concepts, rules, and invariants for Tradai.
   an entry-timing question with no loss gate to back, not a multi-year thesis one.
 - **Sell doctrine:** price action, momentum and concentration are **never** valid sell reasons. A sell at an unrealised
   loss carries a gate label: `offset_same_year` or `no_recovery_24m` (`0013`). **Not enforced in code** — `0018`
-  removed the gate; `doctrine.py` labels the result for the log and changes nothing. Tracker rows carry no gate at
+  removed the gate; `domain/doctrine.py` labels the result for the log and changes nothing. Tracker rows carry no gate at
   all, having no position to be at a loss on.
 - **Role of Claude Agent CLI:** **researcher** — ingests book/market context, explores scenarios, builds Jev requests, writes research, emits info-needs for ingest planning (subscription auth)
 - **Role of Jev:** **decider** — one typed choice per subject x horizon, with confidence; lenses follow the

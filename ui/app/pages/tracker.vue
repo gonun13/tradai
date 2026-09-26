@@ -5,7 +5,7 @@ import type {
   SymbolHit,
   TrackerEntry,
   TrackerInput,
-} from '~/composables/useHoldingsApi'
+} from '~/types/api'
 
 /**
  * The tracker (0019): names of interest the operator does not own. Ingested and researched

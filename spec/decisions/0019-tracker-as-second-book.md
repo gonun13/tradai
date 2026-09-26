@@ -22,7 +22,7 @@ splits in two).
 - A new `archived_at` column carries **auto-promote**: recording an acquisition for a tracked
   symbol archives its row (keeping the note and the date it was tracked); deleting the
   holding un-archives it. A symbol therefore appears in exactly one tab at a time.
-- **Ingestion covers both books.** `refresh.py` changes `INNER JOIN holdings` to a union of
+- **Ingestion covers both books.** `services/refresh.py` changes `INNER JOIN holdings` to a union of
   holdings and unarchived tracker instruments, tagging each with a `book`. Quotes, bars and
   technicals run identically for both.
 - **News does not.** `_refresh_news` stays holdings-only. Marketaux's free tier is 100

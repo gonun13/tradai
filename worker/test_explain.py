@@ -10,8 +10,8 @@ from __future__ import annotations
 import json
 import unittest
 
-from adapters.claude_cli import ClaudeCliError
-from advisory import EXPLAIN_SCHEMA, EXPLAIN_SYSTEM_PROMPT, AdvisoryService, EVIDENCE_LENSES, horizons_for
+from infrastructure.adapters.claude_cli import ClaudeCliError
+from services.advisory import EXPLAIN_SCHEMA, EXPLAIN_SYSTEM_PROMPT, AdvisoryService, EVIDENCE_LENSES, horizons_for
 from test_advisory_budget import context
 
 

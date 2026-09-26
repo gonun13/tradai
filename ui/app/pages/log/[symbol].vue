@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ConversationTurn, Recommendation } from '~/composables/useHoldingsApi'
+import type { ConversationTurn, Recommendation } from '~/types/api'
 
 definePageMeta({
   alias: ['/portfolio/log/:symbol', '/tracker/log/:symbol'],

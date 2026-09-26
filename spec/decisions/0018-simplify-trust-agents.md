@@ -19,7 +19,7 @@ workflow they have to operate.
   says why — that structure is free and stays. What's gone is the requirement that a human
   approve it before it counts, or that a `better_use` sell name a pre-curated watchlist entry.
   Claude's thesis is written straight in and used the same run.
-- **No code-level sell gate.** `worker/doctrine.py` no longer validates or suppresses
+- **No code-level sell gate.** `worker/domain/doctrine.py` no longer validates or suppresses
   anything. It parses Jev's composite choice into (action, reason) and computes an
   informational `loss_gate` label (same-year offset / no-recovery-24m) for the log page —
   neither changes what gets persisted. **Whatever Jev decides is what gets written.** The

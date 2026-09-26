@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { DisplayCurrency, PortfolioSettings, SetupKeys } from '~/composables/useHoldingsApi'
+import type { DisplayCurrency, PortfolioSettings, SetupKeys } from '~/types/api'
 
 const api = useHoldingsApi()
 const { moneyOrDash } = useFormat()

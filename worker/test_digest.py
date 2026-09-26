@@ -11,7 +11,7 @@ import json
 import unittest
 from datetime import date, timedelta
 
-import digest
+from domain import digest
 
 
 def daily(start: date, days: int, first: float, step: float) -> list[tuple[str, float]]:

@@ -6,14 +6,14 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-from adapters.alpha_vantage import (
+from infrastructure.adapters.alpha_vantage import (
     AlphaVantageEquityFundamentalsAdapter,
     AlphaVantageEtfFundamentalsAdapter,
     alpha_vantage_symbol,
 )
-from adapters.fundamentals import FinnhubFundamentalsAdapter
-from adapters.rate_state import PersistentRateLimiter
-from refresh import MarketRefreshService
+from infrastructure.adapters.fundamentals import FinnhubFundamentalsAdapter
+from infrastructure.adapters.rate_state import PersistentRateLimiter
+from services.refresh import MarketRefreshService
 
 
 def response(status: int, payload=None, headers=None) -> Mock:
@@ -40,7 +40,7 @@ class FinnhubFundamentalsTests(unittest.TestCase):
             "totalDebt/totalEquityQuarterly": 40, "currentRatioQuarterly": 1.8,
         }}
         with patch(
-            "adapters.fundamentals.requests.get",
+            "infrastructure.adapters.fundamentals.requests.get",
             side_effect=[response(200, profile), response(200, metrics)],
         ) as get:
             result = adapter.get_fundamentals("aapl", "equity")
@@ -66,7 +66,7 @@ class FinnhubFundamentalsTests(unittest.TestCase):
         for mocked, kind in cases:
             with self.subTest(kind=kind):
                 adapter = FinnhubFundamentalsAdapter("secret-finnhub-key")
-                with patch("adapters.fundamentals.requests.get", return_value=mocked):
+                with patch("infrastructure.adapters.fundamentals.requests.get", return_value=mocked):
                     with self.assertRaises(Exception) as raised:
                         adapter.get_fundamentals("AAPL", "equity")
                 self.assertEqual(kind, raised.exception.kind)
@@ -98,7 +98,7 @@ class AlphaVantageFundamentalsTests(unittest.TestCase):
         ]}
         adapter = AlphaVantageEquityFundamentalsAdapter("secret-alpha")
         with patch(
-            "adapters.alpha_vantage.requests.get",
+            "infrastructure.adapters.alpha_vantage.requests.get",
             side_effect=[response(200, overview), response(200, balance)],
         ) as get:
             result = adapter.get_fundamentals("SAP.DE", "equity", "XETR")
@@ -124,7 +124,7 @@ class AlphaVantageFundamentalsTests(unittest.TestCase):
         }
         adapter = AlphaVantageEtfFundamentalsAdapter("secret-alpha")
         with patch(
-            "adapters.alpha_vantage.requests.get", return_value=response(200, payload)
+            "infrastructure.adapters.alpha_vantage.requests.get", return_value=response(200, payload)
         ) as get:
             result = adapter.get_fundamentals("JEDI.DE", "etf", "XETR")
 
@@ -164,7 +164,7 @@ class AlphaVantageFundamentalsTests(unittest.TestCase):
         for mocked, kind in cases:
             with self.subTest(kind=kind):
                 adapter = AlphaVantageEtfFundamentalsAdapter("secret-alpha-key")
-                with patch("adapters.alpha_vantage.requests.get", return_value=mocked):
+                with patch("infrastructure.adapters.alpha_vantage.requests.get", return_value=mocked):
                     with self.assertRaises(Exception) as raised:
                         adapter.get_fundamentals("QQQ", "etf")
                 self.assertEqual(kind, raised.exception.kind)

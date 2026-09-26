@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { HistoryPoint, HistoryResponse } from '~/composables/useHoldingsApi'
+import type { HistoryPoint, HistoryResponse } from '~/types/api'
 
 const props = defineProps<{
   instrumentId: number

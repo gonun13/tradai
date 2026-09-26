@@ -3,7 +3,7 @@ import type {
   AdvisoryRunLog,
   IngestRunDetail,
   OperationRunSummary,
-} from '~/composables/useHoldingsApi'
+} from '~/types/api'
 
 const props = defineProps<{ kind: 'advisory' | 'ingest' }>()
 const api = useHoldingsApi()

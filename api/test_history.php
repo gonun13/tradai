@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 require __DIR__ . '/vendor/autoload.php';
 
-use Tradai\Api\HistoryRepository;
+use Tradai\Api\Infrastructure\HistoryRepository;
 
 function check(bool $condition, string $message): void
 {

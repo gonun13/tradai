@@ -2,8 +2,8 @@
 
 declare(strict_types=1);
 
-use Tradai\Api\Database;
-use Tradai\Api\IngestRunRepository;
+use Tradai\Api\Infrastructure\Database;
+use Tradai\Api\Infrastructure\IngestRunRepository;
 
 require __DIR__ . '/vendor/autoload.php';
 

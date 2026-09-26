@@ -31,7 +31,7 @@ A position at a gain needs no loss gate (`not_at_loss`).
 
 ### Enforcement
 
-Prompt **and** post-hoc validation. `worker/doctrine.py` evaluates every canonical recommendation before persistence; anything failing the doctrine is suppressed, downgraded, and written with a `suppressed_reason`. The gate **fails closed**: absent or unparseable reason data suppresses rather than permits.
+Prompt **and** post-hoc validation. `worker/domain/doctrine.py` evaluates every canonical recommendation before persistence; anything failing the doctrine is suppressed, downgraded, and written with a `suppressed_reason`. The gate **fails closed**: absent or unparseable reason data suppresses rather than permits.
 
 Suppressed recommendations never raise alerts (`0017`).
 

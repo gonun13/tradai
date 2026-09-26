@@ -10,8 +10,8 @@ import copy
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from digest import LENS_SCHEMA
-from materiality import triggers
+from domain.digest import LENS_SCHEMA
+from domain.materiality import triggers
 
 NOW = datetime(2026, 9, 25, 21, 0, tzinfo=timezone.utc)
 

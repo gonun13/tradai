@@ -20,7 +20,7 @@ This mandate is passed to Claude and to Jev on every run. It is not advisory fla
 
 ## Why
 
-`worker/advisory.py` told Claude only "Be concise", and `worker/adapters/jev.py` asked for "the best overall advisory action" without defining best. An unanchored model shown a negative P&L number recommends selling. The operator observed exactly that and it is the proximate cause of this decision.
+`worker/services/advisory.py` told Claude only "Be concise", and `worker/infrastructure/adapters/jev.py` asked for "the best overall advisory action" without defining best. An unanchored model shown a negative P&L number recommends selling. The operator observed exactly that and it is the proximate cause of this decision.
 
 ## Spec touchpoints
 

@@ -22,7 +22,7 @@ import shutil
 import sys
 import tempfile
 
-from advisory import AdvisoryService, HORIZONS_BY_BOOK, LENSES, horizons_for
+from services.advisory import AdvisoryService, HORIZONS_BY_BOOK, LENSES, horizons_for
 
 SRC = os.environ.get("TRADAI_DATA_DIR", "/data") + "/tradai.sqlite"
 

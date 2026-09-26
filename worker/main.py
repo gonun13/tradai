@@ -9,16 +9,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from adapters.symbol_search import SymbolSearchAdapter
-from advisory import AdvisoryService
-from refresh import MarketRefreshService
-from schedule import (
-    already_fired_today,
-    mark_fired_today,
-    schedule_check_seconds,
-    schedule_status,
-    should_fire_now,
-)
+from domain.schedule import schedule_check_seconds, should_fire_now
+from infrastructure.adapters.symbol_search import SymbolSearchAdapter
+from infrastructure.schedule_marker import already_fired_today, mark_fired_today, schedule_status
+from services.advisory import AdvisoryService
+from services.refresh import MarketRefreshService
 
 
 DATA_DIR = os.environ.get("TRADAI_DATA_DIR", "/data")

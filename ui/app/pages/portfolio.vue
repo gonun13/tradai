@@ -6,7 +6,7 @@ import type {
   Transaction,
   AgentRun,
   Recommendation,
-} from '~/composables/useHoldingsApi'
+} from '~/types/api'
 
 const api = useHoldingsApi()
 const { money, moneyOrDash, pctOrDash } = useFormat()

@@ -7,14 +7,14 @@ Date: 2026-09-21
 ## Change
 
 - The tracker (`0019`) is judged over **`1m | 3m | 6m`**, not the holdings' `6m | 12m | 24m`.
-- `HORIZONS` in `worker/advisory.py` becomes book-scoped:
+- `HORIZONS` in `worker/services/advisory.py` becomes book-scoped:
   `HORIZONS_BY_BOOK = {"portfolio": ("6m", "12m", "24m"), "tracker": ("1m", "3m", "6m")}`.
   Every per-subject horizon loop reads the set for `h["book"]` instead of one global tuple.
 - The `horizon` CHECK constraint is **widened again** to
   `IN ('1m', '3m', '6m', '12m', '24m')`, same approach as `0014`: old values stay legal so
   existing rows survive, nothing is removed.
 - The tracker table's gain columns (`1m`, `3m` — `0019`) get a third, `6m`, once
-  `technicals.py` computes it, so the columns the operator looks at line up with the horizons
+  `domain/technicals.py` computes it, so the columns the operator looks at line up with the horizons
   Jev is actually deciding over.
 
 ## Why

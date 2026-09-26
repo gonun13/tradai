@@ -11,8 +11,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt requirements.lock ./
 RUN pip install --no-cache-dir -r requirements.lock
 
-COPY adapters ./adapters
-COPY refresh.py ingestion.py main.py technicals.py advisory.py schedule.py doctrine.py digest.py materiality.py ./
+COPY domain ./domain
+COPY services ./services
+COPY infrastructure ./infrastructure
+COPY main.py ./
 COPY test_doctrine.py test_currency.py test_fundamentals_adapters.py test_ingestion.py test_persist_e2e.py \
      test_digest.py test_materiality.py test_advisory_budget.py test_explain.py ./
 

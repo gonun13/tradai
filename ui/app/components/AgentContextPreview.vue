@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AgentContextPreviewItem, TechnicalFeatures } from '~/composables/useHoldingsApi'
+import type { AgentContextPreviewItem, TechnicalFeatures } from '~/types/api'
 
 const props = defineProps<{
   book: 'portfolio' | 'tracker'

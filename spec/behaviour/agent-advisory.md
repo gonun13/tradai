@@ -49,7 +49,7 @@ Roles are locked in `decisions/0009-claude-researcher-jev-decider.md`: **Claude 
    question names only its subject, horizon and book, so both books still ride **one call per lens**.
 6. Claude may run further scenario rounds with Jev, bounded by `ADVISORY_MAX_SCENARIO_ROUNDS` (default **0**, maximum **10**); each turn is recorded in the per-instrument conversation transcript.
 7. Claude emits **info-needs** — structured recommendations for ingest/features that would improve the next run.
-8. `worker/doctrine.py` parses Jev's composite choice into (action, reason) and computes an informational
+8. `worker/domain/doctrine.py` parses Jev's composite choice into (action, reason) and computes an informational
    `loss_gate` label for the log. **It gates nothing** — `0018` removed suppression, and whatever Jev decides is
    what gets written. Tracker rows carry no gate and no `pair_symbol`, having no position to be at a loss on.
 9. **Claude (explainer)** (`0028`) explains each decided subject's combined decision in plain language — at

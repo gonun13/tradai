@@ -7,12 +7,12 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
-from adapters import Bar, HistoricalPoint, LongHistory, Quote
-from adapters.base import AdapterMetadata, RatePolicy, select_first_complete
-from adapters.errors import AdapterTransientError
-from adapters.marketaux import MarketauxNewsAdapter, NewsHeadline
-from adapters.rate_state import PersistentRateLimiter
-from ingestion import (
+from domain.market import Bar, HistoricalPoint, LongHistory, Quote
+from domain.providers.base import AdapterMetadata, RatePolicy, select_first_complete
+from domain.providers.errors import AdapterTransientError
+from infrastructure.adapters.marketaux import MarketauxNewsAdapter, NewsHeadline
+from infrastructure.adapters.rate_state import PersistentRateLimiter
+from domain.ingestion import (
     cache_wins,
     compact_long_history,
     evaluate_bars,
@@ -23,7 +23,7 @@ from ingestion import (
     evaluate_technicals,
     long_history_cache_wins,
 )
-from refresh import MarketRefreshService
+from services.refresh import MarketRefreshService
 
 
 class FakeAdapter:
@@ -256,7 +256,7 @@ class ContractTests(unittest.TestCase):
     def test_provider_http_errors_do_not_expose_credentials(self):
         response = Mock(status_code=500, headers={})
         adapter = MarketauxNewsAdapter("super-secret-token")
-        with patch("adapters.marketaux.requests.get", return_value=response):
+        with patch("infrastructure.adapters.marketaux.requests.get", return_value=response):
             with self.assertRaises(Exception) as raised:
                 adapter.get_headlines(["AAPL"])
         self.assertNotIn("super-secret-token", str(raised.exception))
@@ -306,7 +306,7 @@ class PersistenceTests(unittest.TestCase):
         try:
             limiter = PersistentRateLimiter(conn)
             limiter.before_call(adapter)
-            with patch("adapters.rate_state.time.sleep") as sleeper:
+            with patch("infrastructure.adapters.rate_state.time.sleep") as sleeper:
                 # Remove the hard window override to isolate minimum-interval pacing.
                 os.environ.pop("LIMITED_RATE_WINDOW_LIMIT")
                 limiter.before_call(adapter)

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Alert } from '~/composables/useHoldingsApi'
+import type { Alert } from '~/types/api'
 
 const api = useHoldingsApi()
 const open = ref(false)

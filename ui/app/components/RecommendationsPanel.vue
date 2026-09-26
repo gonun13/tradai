@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AgentRun, Book, Recommendation } from '~/composables/useHoldingsApi'
+import type { AgentRun, Book, Recommendation } from '~/types/api'
 
 /**
  * One combined daily run decides on both books (0019), so it produces one recommendation

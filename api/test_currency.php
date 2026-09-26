@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-use Tradai\Api\Database;
-use Tradai\Api\HoldingRepository;
-use Tradai\Api\SettingsRepository;
-use Tradai\Api\TrackerRepository;
+use Tradai\Api\Infrastructure\Database;
+use Tradai\Api\Infrastructure\HoldingRepository;
+use Tradai\Api\Infrastructure\SettingsRepository;
+use Tradai\Api\Infrastructure\TrackerRepository;
 
 require __DIR__ . '/vendor/autoload.php';
 
