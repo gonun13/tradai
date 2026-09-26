@@ -33,14 +33,6 @@ class AdapterMetadata:
     enabled: bool
     rate_policy: RatePolicy = RatePolicy()
 
-    def supports(self, operation: str, region: str, kind: str) -> bool:
-        return (
-            self.enabled
-            and operation in self.operations
-            and region in self.regions
-            and kind in self.instrument_kinds
-        )
-
 
 @dataclass
 class CandidateResult:

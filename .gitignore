@@ -12,3 +12,11 @@ __pycache__/
 *.db
 .idea/
 .vscode/
+.env.*
+!.env.example
+*.log
+.claude/
+.cursor/
+.codex/
+.opencode/
+.aider*

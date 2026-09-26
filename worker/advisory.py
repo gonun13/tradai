@@ -474,9 +474,6 @@ class AdvisoryService:
             return refs if isinstance(refs, dict) else {}
         return {}
 
-    def _get_target_symbol(self, conn: sqlite3.Connection, run_id: int) -> str | None:
-        return self._run_refs(conn, run_id).get("target_symbol")
-
     def run(self, run_id: int) -> dict[str, Any]:
         conn = self.connect()
         log: list[str] = []

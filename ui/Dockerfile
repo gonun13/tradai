@@ -9,6 +9,10 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
+# Check-only target (`docker build --target typecheck ui`); the runtime image never builds it.
+FROM build AS typecheck
+RUN npm run typecheck
+
 FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production

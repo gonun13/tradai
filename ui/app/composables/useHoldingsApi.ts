@@ -333,26 +333,6 @@ export function useHoldingsApi() {
       body,
     })
 
-  const listTheses = (status?: 'draft' | 'approved' | 'superseded') =>
-    $fetch<{ ok: boolean; theses: Thesis[]; coverage: ThesisCoverage[] }>(
-      `/api/theses${status ? `?status=${status}` : ''}`,
-    )
-
-  const saveThesis = (
-    id: number,
-    body: { thesis?: string; falsifiers?: string[]; status?: string },
-  ) => $fetch<{ ok: boolean; thesis: Thesis }>(`/api/theses/${id}`, { method: 'PUT', body })
-
-  const createThesis = (body: {
-    instrument_id: number
-    thesis: string
-    falsifiers?: string[]
-    status?: string
-  }) => $fetch<{ ok: boolean; thesis: Thesis }>('/api/theses', { method: 'POST', body })
-
-  const removeThesis = (id: number) =>
-    $fetch<{ ok: boolean }>(`/api/theses/${id}`, { method: 'DELETE' })
-
   // 0019: the tracker — a second book, not a note. Same ingest and same agent research as
   // the portfolio, so entries carry a quote and technicals like a holding does.
   const listTracker = () =>
@@ -368,9 +348,6 @@ export function useHoldingsApi() {
 
   const addTracker = (body: TrackerInput) =>
     $fetch<{ ok: boolean; entry: TrackerEntry }>('/api/tracker', { method: 'POST', body })
-
-  const updateTracker = (id: number, body: { name?: string | null }) =>
-    $fetch<{ ok: boolean; entry: TrackerEntry }>(`/api/tracker/${id}`, { method: 'PUT', body })
 
   const removeTracker = (id: number) =>
     $fetch<{ ok: boolean }>(`/api/tracker/${id}`, { method: 'DELETE' })
@@ -391,14 +368,9 @@ export function useHoldingsApi() {
     remove,
     getSettings,
     saveSettings,
-    listTheses,
-    saveThesis,
-    createThesis,
-    removeThesis,
     listTracker,
     contextPreview,
     addTracker,
-    updateTracker,
     removeTracker,
     searchInstruments,
     instrumentHistory,
@@ -634,30 +606,6 @@ export type RecommendationReason =
   | 'entry_now'
   | 'await_better_entry'
   | 'lost_interest'
-
-export type Thesis = {
-  id: number
-  instrument_id: number
-  symbol: string | null
-  instrument_name: string | null
-  thesis: string
-  falsifiers: string[]
-  status: 'draft' | 'approved' | 'superseded'
-  version: number
-  source: 'claude' | 'operator'
-  agent_run_id: number | null
-  created_at: string
-  approved_at: string | null
-  superseded_at: string | null
-}
-
-export type ThesisCoverage = {
-  instrument_id: number
-  symbol: string
-  name: string | null
-  has_approved: boolean
-  pending_drafts: number
-}
 
 export type TrackerEntry = {
   id: number

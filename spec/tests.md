@@ -217,6 +217,16 @@ docker compose exec worker python test_explain.py
 | `test_explain.py` | Explain prompt carries combined choice, confidence and probabilities, lens verdicts, market cards and headlines (never history points); bare structured call; tolerant parsing; a Claude failure is logged, never raised |
 | `test_advisory_budget.py` | 14-subject worst case stays under Jev and Claude payload ceilings; guidance sent once per call; each lens sees only its own layer; combined sees the lens verdicts |
 
+## Automated (UI)
+
+The runtime image ships only the build output, so the type check runs as its own build target:
+
+```bash
+docker build --target typecheck ui
+```
+
+Passes when `nuxt typecheck` (vue-tsc) reports no errors across pages, components, composables and server routes.
+
 ## Browser acceptance (Docker Playwright MCP)
 
 1. `/` redirects to `/portfolio`; `/?buy=NVDA` redirects to `/portfolio?buy=NVDA` and opens the acquisition form.
