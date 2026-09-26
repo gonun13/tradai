@@ -89,9 +89,9 @@ cp .env.example .env   # if needed
 1. Set `MARKETAUX_API_TOKEN`
 2. **Ingest now** — technicals (RSI/SMA), fundamentals when a route is available, and
    daily-cached news on holdings and tracked names
-3. The completion message reports ingested vs cached instrument datasets for Historical,
-   Fundamentals, Technicals, and News; `/ingest/report` retains the same statistics plus
-   missing counts and the Historical quote/bars breakdown
+3. **Ingest logs** reports ingested vs cached vs missing instrument datasets for Historical,
+   Fundamentals, Technicals, and News, including the Historical quote/bars breakdown; the panel
+   does not render this report and the utility bar briefly flashes `Ingest finished.`
 4. Force news: `docker compose exec worker curl -fsS -X POST 'http://api:8080/refresh/market?force_news=1'`
 5. `docker compose exec worker curl -fsS 'http://api:8080/context/preview?book=portfolio'`
    and `?book=tracker` return book-scoped Historical, Fundamentals, Technicals and News snapshots
@@ -114,6 +114,21 @@ cp .env.example .env   # if needed
 10. Each panel shows a **Market read**; each ticker shows Claude's explanation (plus a "Tension:" line when
     given); `/portfolio/log/<symbol>` opens with a **Why** section and the transcript ends with an
     `explanation` turn (`0028`)
+11. **Advisory logs** lists the newest 20 runs and loads metadata, `context …`, `materiality …`,
+    and errors only after selection; the recommendation panel shows none of this operational text.
+
+### Operation history and feedback (`0029`)
+
+1. Successful and failed manual ingests each create a row with both timestamps and detail; a 21st
+   row prunes the oldest, while scheduled ingestion creates none.
+2. Advisory history includes scheduled, manual, forced, and targeted effective triggers and returns
+   only 20 lightweight summaries without stored research or context.
+3. Portfolio and Tracker open the same separate Advisory/Ingest modals, newest first. Verify loading,
+   empty and API-error states, focus containment/restoration, Escape/Close, and narrow layout.
+4. Global and Tracker-symbol runs show the exact concise success, warning, cached, timeout, or failure
+   flash in the utility bar. Success dismisses at four seconds and warning/error at eight.
+5. Operation messages never appear in either module panel or ticker log page; CRUD and loading
+   feedback remains in place.
 
 Token thrift defaults: `ADVISORY_INTERVAL_SECONDS=86400`, `ADVISORY_MAX_SCENARIO_ROUNDS=0` (set `3` for full
 scenario loop per `0009`), `ADVISORY_MATERIAL_MOVE_PCT=5`, `ADVISORY_MAX_CARRY_DAYS=7` (`0` disables carrying).
@@ -174,6 +189,7 @@ Run inside Compose after `bin/up -d`:
 docker compose exec api php test_holding_daily_change.php
 docker compose exec api php test_currency.php
 docker compose exec api php test_history.php
+docker compose exec api php test_operation_history.php
 docker compose exec worker python test_doctrine.py
 docker compose exec worker python test_currency.py
 docker compose exec worker python test_fundamentals_adapters.py
@@ -190,6 +206,7 @@ docker compose exec worker python test_explain.py
 | `test_holding_daily_change.php` | Portfolio and Tracker live quote versus prior-session close, including unavailable values |
 | `test_currency.php` | EUR default, validation, partial updates, legacy migration, source currencies, cross-rates, quote-currency conversion and missing FX |
 | `test_history.php` | Ranges, common-date normalization, pre-benchmark Max points, native currencies, missing data and validation |
+| `test_operation_history.php` | Manual ingest success/failure detail and newest-20 pruning |
 | `test_doctrine.py` | Choice parsing, loss-gate labels, mandate composition, tracker vs portfolio choice maps |
 | `worker/test_currency.py` | Worker FX collection and display-currency advisory context, including incomplete aggregate behavior |
 | `test_fundamentals_adapters.py` | Finnhub/Alpha Vantage normalization, failures, symbol translation, routing and persisted daily quota |

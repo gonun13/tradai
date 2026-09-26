@@ -12,6 +12,7 @@ use Tradai\Api\AlertRepository;
 use Tradai\Api\Database;
 use Tradai\Api\HoldingRepository;
 use Tradai\Api\HistoryRepository;
+use Tradai\Api\IngestRunRepository;
 use Tradai\Api\OutcomeRepository;
 use Tradai\Api\SettingsRepository;
 use Tradai\Api\InstrumentRepository;
@@ -30,6 +31,7 @@ $workerBase = getenv('WORKER_BASE_URL') ?: 'http://worker:8090';
 $pdo = Database::connection($dataDir);
 $holdings = new HoldingRepository($pdo);
 $history = new HistoryRepository($pdo);
+$ingestRuns = new IngestRunRepository($pdo);
 $agents = new AgentRepository($pdo);
 $alerts = new AlertRepository($pdo);
 $outcomes = new OutcomeRepository($pdo);
@@ -101,11 +103,14 @@ $app->get('/', function (Request $request, Response $response) use ($json): Resp
             'DELETE /holdings/{id}',
             'GET /context/preview?book=portfolio|tracker',
             'GET /ingest/report',
+            'GET /ingest/runs',
+            'GET /ingest/runs/{id}',
             'POST /refresh/market',
             'POST /agent/run',
             'GET /agent/runs',
             'GET /agent/runs/latest',
             'GET /agent/runs/{id}',
+            'GET /agent/runs/{id}/log',
             'GET /recommendations',
             'GET /alerts',
             'POST /alerts/{id}/ack',
@@ -297,10 +302,29 @@ $app->get('/ingest/report', function (Request $request, Response $response) use 
     ]);
 });
 
-$app->post('/refresh/market', function (Request $request, Response $response) use ($json, $worker): Response {
+$app->get('/ingest/runs', function (Request $request, Response $response) use ($json, $ingestRuns): Response {
+    return $json($response, ['ok' => true, 'runs' => $ingestRuns->list()]);
+});
+
+$app->get('/ingest/runs/{id}', function (Request $request, Response $response, array $args) use ($json, $ingestRuns): Response {
+    $run = $ingestRuns->find((int) $args['id']);
+    if ($run === null) {
+        throw new \RuntimeException('Ingest run not found.', 404);
+    }
+    return $json($response, ['ok' => true, 'run' => $run]);
+});
+
+$app->post('/refresh/market', function (Request $request, Response $response) use ($json, $worker, $ingestRuns): Response {
     $force = in_array(strtolower((string) ($request->getQueryParams()['force_news'] ?? '')), ['1', 'true', 'yes'], true);
-    $result = $worker->refreshMarket($force);
-    return $json($response, ['ok' => true, 'refresh' => $result]);
+    $runId = $ingestRuns->start();
+    try {
+        $result = $worker->refreshMarket($force);
+        $ingestRuns->succeed($runId, $result);
+        return $json($response, ['ok' => true, 'run_id' => $runId, 'refresh' => $result]);
+    } catch (\Throwable $exception) {
+        $ingestRuns->fail($runId, $exception->getMessage());
+        throw $exception;
+    }
 });
 
 $app->post('/agent/run', function (Request $request, Response $response) use ($json, $worker, $agents): Response {
@@ -376,6 +400,14 @@ $app->get('/agent/runs/{id}', function (Request $request, Response $response, ar
         'run' => $run,
         'recommendations' => $agents->recommendations($id),
     ]);
+});
+
+$app->get('/agent/runs/{id}/log', function (Request $request, Response $response, array $args) use ($json, $agents): Response {
+    $run = $agents->runLog((int) $args['id']);
+    if ($run === null) {
+        throw new \RuntimeException('Agent run not found.', 404);
+    }
+    return $json($response, ['ok' => true, 'run' => $run]);
 });
 
 $app->get('/recommendations', function (Request $request, Response $response) use ($json, $agents): Response {

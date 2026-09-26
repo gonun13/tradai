@@ -13,7 +13,7 @@ import type {
  */
 const api = useHoldingsApi()
 const { moneyOrDash, pctOrDash, fmtNum } = useFormat()
-const { message: opsMessage, error: opsError, advising } = useGlobalOps()
+const { advising, runSymbol } = useGlobalOps()
 
 const message = ref('')
 const error = ref('')
@@ -167,44 +167,11 @@ async function removeEntry(entry: TrackerEntry) {
 
 async function runSingle(entry: TrackerEntry) {
   advisingSingle.value = entry.symbol
-  error.value = ''
   try {
-    const result = await api.runAdvisorySingle(entry.symbol, { force: false })
-    const runId = result.run_id
-    if (!runId) {
-      throw new Error((result.worker as { error?: string })?.error || 'Failed to start')
-    }
-    if (result.from_cache) {
-      message.value = `Used cached run #${runId} for ${entry.symbol}`
-      await refreshAdvisory()
-      return
-    }
-    message.value = `Run #${runId} started for ${entry.symbol}...`
-    // Poll for completion
-    await pollSingleRun(runId)
-    await Promise.all([refresh(), refreshContext(), refreshAdvisory()])
-  } catch (e) {
-    error.value = errText(e)
+    await runSymbol(entry.symbol)
   } finally {
     advisingSingle.value = null
   }
-}
-
-async function pollSingleRun(runId: number) {
-  const terminal = new Set(['succeeded', 'failed', 'partial'])
-  for (let i = 0; i < 60; i++) {
-    await new Promise(r => setTimeout(r, 2000))
-    try {
-      const snap = await api.getRun(runId)
-      if (terminal.has(snap.run.status)) {
-        message.value = `Run #${runId} ${snap.run.status} — ${snap.recommendations.length} recommendation(s)`
-        return
-      }
-    } catch {
-      // Run might not be ready yet, continue polling
-    }
-  }
-  message.value = `Run #${runId} still in progress — reload later`
 }
 
 function errText(e: unknown) {
@@ -253,15 +220,8 @@ function toggleHistory(instrumentId: number) {
       </div>
     </section>
 
-    <p class="module-guide">
-      Tracked names share quotes, bars, fundamentals, technicals and news with holdings, then
-      join the same daily Claude/Jev run under your
-      <NuxtLink to="/setup">investor profile</NuxtLink>. Recording a purchase hands the name
-      to Portfolio.
-    </p>
-
-    <p v-if="opsMessage || message" class="ok">{{ opsMessage || message }}</p>
-    <p v-if="opsError || error || loadError" class="bad">{{ opsError || error || loadError }}</p>
+    <p v-if="message" class="ok">{{ message }}</p>
+    <p v-if="error || loadError" class="bad">{{ error || loadError }}</p>
 
     <section class="panel">
       <div class="list-head">

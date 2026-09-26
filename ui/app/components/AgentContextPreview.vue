@@ -54,9 +54,12 @@ function fundamentalsScore(score: number): string {
   <section class="panel context-preview" aria-labelledby="context-preview-title">
     <div class="list-head">
       <h1 id="context-preview-title">Agent context preview</h1>
-      <span v-if="items.length" class="context-count">
-        {{ items.length }} {{ subjectLabel }}{{ items.length === 1 ? '' : 's' }}
-      </span>
+      <div class="context-head-actions">
+        <span v-if="items.length" class="context-count">
+          {{ items.length }} {{ subjectLabel }}{{ items.length === 1 ? '' : 's' }}
+        </span>
+        <OperationHistoryModal kind="ingest" />
+      </div>
     </div>
     <p class="mute">
       Current cached market data that will be assembled for the next Claude + Jev run.
@@ -180,6 +183,7 @@ function fundamentalsScore(score: number): string {
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
+.context-head-actions { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; justify-content: flex-end; }
 
 .context-ticker {
   border-top: 1px solid var(--line);

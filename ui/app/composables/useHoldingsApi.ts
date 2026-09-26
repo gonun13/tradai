@@ -186,9 +186,15 @@ export function useHoldingsApi() {
     $fetch<{ ok: boolean }>(`/api/holdings/${id}`, { method: 'DELETE' })
 
   const refreshMarket = () =>
-    $fetch<{ ok: boolean; refresh: Record<string, unknown> }>('/api/refresh/market', {
+    $fetch<{ ok: boolean; run_id: number; refresh: Record<string, unknown> }>('/api/refresh/market', {
       method: 'POST',
     })
+
+  const listIngestRuns = () =>
+    $fetch<{ ok: boolean; runs: OperationRunSummary[] }>('/api/ingest/runs')
+
+  const getIngestRun = (id: number) =>
+    $fetch<{ ok: boolean; run: IngestRunDetail }>(`/api/ingest/runs/${id}`)
 
   const ingestReport = () =>
     $fetch<{
@@ -276,6 +282,12 @@ export function useHoldingsApi() {
       run: dropResearch(res.run) as AgentRun,
       recommendations: dropRationale(res.recommendations),
     }))
+
+  const listAgentRuns = () =>
+    $fetch<{ ok: boolean; runs: OperationRunSummary[] }>('/api/agent/runs')
+
+  const getAgentRunLog = (id: number) =>
+    $fetch<{ ok: boolean; run: AdvisoryRunLog }>(`/api/agent/runs/${id}/log`)
 
   const listAlerts = (opts?: { unread?: boolean }) => {
     const q =
@@ -391,15 +403,37 @@ export function useHoldingsApi() {
     searchInstruments,
     instrumentHistory,
     refreshMarket,
+    listIngestRuns,
+    getIngestRun,
     ingestReport,
     runAdvisory,
     runAdvisorySingle,
     latestRun,
     getRun,
+    listAgentRuns,
+    getAgentRunLog,
     listAlerts,
     ackAlert,
     setupStatus,
   }
+}
+
+export type OperationRunSummary = {
+  id: number
+  trigger: 'manual' | 'forced' | 'targeted' | 'schedule'
+  status: 'pending' | 'running' | 'succeeded' | 'failed' | 'partial'
+  started_at: string
+  finished_at: string | null
+}
+
+export type IngestRunDetail = OperationRunSummary & {
+  report: Record<string, unknown> | null
+  error: string | null
+}
+
+export type AdvisoryRunLog = OperationRunSummary & {
+  log: string | null
+  error: string | null
 }
 
 export type SetupKeys = {

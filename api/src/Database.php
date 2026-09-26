@@ -235,6 +235,18 @@ final class Database
                 updated_at TEXT NOT NULL
             );
 
+            -- 0029: operator-visible history is manual ingest only. The singleton above
+            -- remains the source of the latest status/elapsed-time display.
+            CREATE TABLE IF NOT EXISTS ingest_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
+                trigger_kind TEXT NOT NULL CHECK (trigger_kind = 'manual'),
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                report_json TEXT,
+                error_text TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS agent_runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 trigger_kind TEXT NOT NULL CHECK (trigger_kind IN ('schedule', 'manual')),

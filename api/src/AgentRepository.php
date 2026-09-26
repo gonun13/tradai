@@ -36,11 +36,55 @@ final class AgentRepository
     public function listRuns(int $limit = 20): array
     {
         $stmt = $this->db->prepare(
-            'SELECT * FROM agent_runs ORDER BY id DESC LIMIT :limit'
+            'SELECT id, trigger_kind, status, started_at, finished_at, model_refs_json
+             FROM agent_runs ORDER BY id DESC LIMIT :limit'
         );
         $stmt->bindValue('limit', $limit, PDO::PARAM_INT);
         $stmt->execute();
-        return array_map(fn (array $row): array => $this->mapRun($row), $stmt->fetchAll());
+        return array_map(fn (array $row): array => $this->mapRunSummary($row), $stmt->fetchAll());
+    }
+
+    /** @return array<string, mixed>|null */
+    public function runLog(int $id): ?array
+    {
+        $stmt = $this->db->prepare(<<<'SQL'
+            SELECT id, trigger_kind, status, started_at, finished_at, model_refs_json,
+                   log_text, error_text
+            FROM agent_runs WHERE id = :id
+            SQL);
+        $stmt->execute(['id' => $id]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            return null;
+        }
+        return [
+            ...$this->mapRunSummary($row),
+            'log' => $row['log_text'],
+            'error' => $row['error_text'],
+        ];
+    }
+
+    /** @param array<string, mixed> $row */
+    private function mapRunSummary(array $row): array
+    {
+        $refs = [];
+        if (!empty($row['model_refs_json'])) {
+            $decoded = json_decode((string) $row['model_refs_json'], true);
+            $refs = is_array($decoded) ? $decoded : [];
+        }
+        $trigger = (string) $row['trigger_kind'];
+        if (!empty($refs['target_symbol'])) {
+            $trigger = 'targeted';
+        } elseif (!empty($refs['force'])) {
+            $trigger = 'forced';
+        }
+        return [
+            'id' => (int) $row['id'],
+            'trigger' => $trigger,
+            'status' => $row['status'],
+            'started_at' => $row['started_at'],
+            'finished_at' => $row['finished_at'],
+        ];
     }
 
     /**

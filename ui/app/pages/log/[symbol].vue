@@ -8,7 +8,6 @@ definePageMeta({
 const route = useRoute()
 const api = useHoldingsApi()
 const { moneyOrDash } = useFormat()
-const { message: opsMessage, error: opsError } = useGlobalOps()
 
 const symbol = computed(() => {
   const raw = route.params.symbol
@@ -150,8 +149,6 @@ watch(
       </NuxtLink>
     </section>
 
-    <p v-if="opsMessage" class="ok">{{ opsMessage }}</p>
-    <p v-if="opsError" class="bad">{{ opsError }}</p>
     <p v-if="pending" class="mute">Loading transcript…</p>
     <p v-else-if="error" class="bad">{{ error }}</p>
     <p v-else-if="!primary" class="mute">No recommendation found for {{ symbol }} on the latest run.</p>

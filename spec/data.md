@@ -145,6 +145,20 @@ gap streak, next due time, and optional input fingerprint. Provider rate state s
 persists window counters, last call, cooldown, and observed limit/remaining/reset headers.
 Regional benchmark refresh state is separate because it is shared rather than instrument-owned.
 
+### ManualIngestRun
+
+| Field (logical) | Notes |
+| --- | --- |
+| id | Monotonic operation ID |
+| status | `running` \| `succeeded` \| `failed` |
+| trigger | `manual`; scheduled worker ingestion creates no row |
+| started_at / finished_at | Complete operation timing |
+| report | Stored ingest report, including layer counts, historical breakdown, warnings and missing symbols |
+| error | Failure text when present |
+
+Only the newest 20 manual-ingest rows are retained. The separate singleton ingest report remains
+the latest-status and elapsed-time contract; historical singleton reports are not backfilled.
+
 ### AgentRun
 
 | Field (logical) | Notes |
@@ -157,6 +171,9 @@ Regional benchmark refresh state is separate because it is shared rather than in
 | research | Claude researcher output for the run (notes / synthesis; may be JSON or text) |
 | info_needs | Structured list of ingest/feature gaps Claude recommends for better future runs |
 | context | Snapshot of the full blob actually fed to Claude/Jev for this run — both books, profiles, cash, realized gains, per-subject quote/fundamentals/technicals/news/thesis. See "Outbound payload contract" below |
+
+AgentRun rows remain permanently stored. The operation-history list exposes only the newest 20
+IDs, statuses, effective triggers, and timestamps; it never includes research or full context.
 
 ### Recommendation
 

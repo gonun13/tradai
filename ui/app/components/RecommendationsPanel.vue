@@ -106,27 +106,15 @@ function onLogClick(event: Event, rec: Recommendation | undefined) {
         <p class="section-kicker">{{ book === 'portfolio' ? 'Owned-book advisory' : 'Entry advisory' }}</p>
         <h1>{{ book === 'portfolio' ? 'Portfolio decisions' : 'Tracker signals' }}</h1>
       </div>
-      <button type="button" class="ghost" :disabled="busy" @click="emit('reload')">Reload run</button>
+      <div class="panel-actions">
+        <OperationHistoryModal kind="advisory" />
+        <button type="button" class="ghost" :disabled="busy" @click="emit('reload')">Reload run</button>
+      </div>
     </div>
 
-    <p v-if="run" class="mute">
-      Run #{{ run.id }} ·
-      <strong
-        :class="{
-          ok: run.status === 'succeeded',
-          bad: run.status === 'failed',
-          warn: run.status === 'partial' || run.status === 'running' || run.status === 'pending',
-        }"
-      >{{ run.status }}</strong>
-      · {{ run.trigger }}
-      · started {{ run.started_at }}
-      <template v-if="run.finished_at"> · finished {{ run.finished_at }}</template>
-    </p>
-    <p v-else class="mute">
+    <p v-if="!run" class="mute">
       No agent run yet — set <code>CLAUDE_CODE_OAUTH_TOKEN</code> + <code>TYPESAFE_API_KEY</code>, then Run now.
     </p>
-    <p v-if="run?.error" class="bad">{{ run.error }}</p>
-    <pre v-if="run?.log" class="log">{{ run.log }}</pre>
 
     <div v-if="marketRead" class="market-read">
       <h2>Market read</h2>
@@ -192,4 +180,5 @@ function onLogClick(event: Event, rec: Recommendation | undefined) {
 }
 
 .section-kicker + h1 { margin-bottom: 0; }
+.panel-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end; }
 </style>

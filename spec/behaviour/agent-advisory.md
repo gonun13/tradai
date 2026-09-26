@@ -83,6 +83,17 @@ Roles are locked in `decisions/0009-claude-researcher-jev-decider.md`: **Claude 
 2. UI loads that instrument’s Claude↔Jev transcript for the selected (default: latest) `AgentRun`.
 3. Transcript shows researcher turns (Claude) and decider answers (Jev), including lens passes and any scenario rounds.
 
+### View advisory operation history
+
+1. **Advisory logs** lists the newest 20 scheduled, manual, forced, and targeted runs.
+2. Selecting a run loads only its operational detail: status, effective trigger, timestamps,
+   error, and persisted log lines such as `context …` and `materiality …`.
+3. Research and full context are excluded from the history list and log-detail contract. Run
+   metadata, errors, and worker log text do not render in the recommendation panel.
+4. Manual global and targeted runs use the shared utility flash for success, partial, cached,
+   timeout, and failed outcomes and refresh both books, recommendations, alerts, elapsed status,
+   context previews, and open history.
+
 ## Rules
 
 - **No auto-execution** of trades.

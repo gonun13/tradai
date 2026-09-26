@@ -13,7 +13,11 @@ two tabs in the same book.
 - A compact module switcher changes workspace. It is app navigation, not an in-page tab strip.
 - Ingest, Run, Force run, Setup and Alerts live in a neutral utility bar because they operate on
   both books. Copy must make that shared scope clear.
+- Ingest and Run show the elapsed time since their latest invocation directly below their controls,
+  in fractional hours.
 - Setup is neutral. Decision logs inherit the module that produced the recommendation.
+- A concise outcome flash appears at the utility bar after ingest or advisory completes. Success
+  remains for four seconds; warnings and failures remain for eight seconds.
 
 ## Module identities
 
@@ -40,6 +44,10 @@ supporting information only: titles, copy and active navigation also identify th
 - Both modules expose the next-run agent context per ticker in disclosures that are closed by
   default. An open disclosure shows Historical, Fundamentals and Technicals in one responsive
   row, followed by a full-width News row; each layer names missing data explicitly.
+- Recommendations expose **Advisory logs** and Agent context preview exposes **Ingest logs**. Each
+  opens its own newest-20 modal, selects the newest row, and fetches detail only on selection.
+  Operation metadata, worker logs, ingest reports, and operation feedback do not appear inline in
+  module panels or ticker log pages. CRUD and page-load feedback remains inline.
 
 ## Setup
 
@@ -92,3 +100,5 @@ screens the chart remains legible in a horizontally contained surface.
 - Agent-context ticker disclosures are keyboard operable and their three data columns stack without
   changing meaning on narrow screens.
 - Text and interactive boundaries must remain readable at WCAG AA contrast in both palettes.
+- History modals trap focus, close on Escape or an explicit Close control, restore opener focus,
+  and provide loading, empty, fetch-error, and single-column narrow-screen states.

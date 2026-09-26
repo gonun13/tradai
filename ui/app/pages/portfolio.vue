@@ -55,37 +55,11 @@ const portfolioValue = computed(() => data.value?.portfolio_market_value_display
 const displayCurrency = computed(() => data.value?.display_currency ?? 'EUR')
 // Ingest / Run / Force are inline buttons in the layout header — one combined run covers both
 // books (0019), so there is nothing per-tab to trigger from here.
-const { message: opsMessage, error: opsError, advising } = useGlobalOps()
+const { advising } = useGlobalOps()
 const agentRun = ref<AgentRun | null>(null)
 const recommendations = ref<Recommendation[]>([])
-const symbolNotFound = ref<
-  Array<{ instrument_id: number; symbol: string; vendor: string; detail: string | null }>
->([])
-
-const { data: reportData } = await useAsyncData('ingest-report', () =>
-  api.ingestReport().catch(() => ({
-    ok: true,
-    symbol_not_found: [] as Array<{
-      instrument_id: number
-      symbol: string
-      vendor: string
-      detail: string | null
-    }>,
-    errors: [] as string[],
-    report: null,
-  })),
-)
-
 const { data: advisoryData, refresh: refreshAdvisory } = await useAsyncData('advisory-latest', () =>
   api.latestRun().catch(() => ({ ok: true, run: null, recommendations: [] as Recommendation[] })),
-)
-
-watch(
-  reportData,
-  (r) => {
-    symbolNotFound.value = r?.symbol_not_found ?? []
-  },
-  { immediate: true },
 )
 
 watch(
@@ -274,30 +248,8 @@ async function removeHolding(h: Holding) {
       </div>
     </section>
 
-    <p class="module-guide">
-      Cost basis includes commission. Converted values use {{ displayCurrency }}; holdings also receive
-      news and technical context. Claude researches and Jev decides using the portfolio mandate.
-      The shared run also covers the <NuxtLink to="/tracker">Tracker module</NuxtLink>.
-    </p>
-
-    <p v-if="opsMessage || message" class="ok">{{ opsMessage || message }}</p>
-    <p v-if="opsError || error || loadError" class="bad">{{ opsError || error || loadError }}</p>
-
-    <section v-if="symbolNotFound.length" class="panel warn" aria-live="polite">
-      <h1>Symbol not found</h1>
-      <p class="mute">
-        Vendor has no quote for these book symbols — check ticker / venue suffix (e.g. <code>.DE</code> vs <code>.PA</code>).
-      </p>
-      <ul class="missing">
-        <li v-for="m in symbolNotFound" :key="m.instrument_id">
-          <strong>{{ m.symbol }}</strong>
-          <span class="sub">
-            {{ m.book === 'tracker' ? 'tracker' : 'portfolio' }} · {{ m.vendor
-            }}{{ m.detail ? ` · ${m.detail}` : '' }}
-          </span>
-        </li>
-      </ul>
-    </section>
+    <p v-if="message" class="ok">{{ message }}</p>
+    <p v-if="error || loadError" class="bad">{{ error || loadError }}</p>
 
     <section v-if="lotPickerHolding" class="panel">
       <h1>Choose acquisition to edit — {{ lotPickerHolding.instrument.symbol }}</h1>
@@ -461,7 +413,7 @@ async function removeHolding(h: Holding) {
                 v-if="h.market_value_native != null && (h.quote?.currency || h.instrument.currency).toUpperCase() !== displayCurrency"
                 class="sub"
               >
-                {{ money(h.market_value_native, h.quote?.currency || h.instrument.currency) }} native
+                {{ money(h.market_value_native, h.quote?.currency || h.instrument.currency) }}
               </span>
             </td>
             <td :class="{ ok: (h.pnl_display ?? 0) > 0, bad: (h.pnl_display ?? 0) < 0 }">
@@ -470,7 +422,7 @@ async function removeHolding(h: Holding) {
                 v-if="h.pnl_native != null && h.instrument.currency.toUpperCase() !== displayCurrency"
                 class="sub"
               >
-                {{ money(h.pnl_native, h.instrument.currency) }} native
+                {{ money(h.pnl_native, h.instrument.currency) }}
               </span>
             </td>
             <td :class="{ ok: (h.pnl_pct ?? 0) > 0, bad: (h.pnl_pct ?? 0) < 0 }">

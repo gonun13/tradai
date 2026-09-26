@@ -44,6 +44,16 @@ Near-live dashboard view of holdings with market context. Polling delayed or nea
    being considered — price, 1m/3m momentum and RSI, with no cost basis to show.
 3. Sees recent recommendations / alerts summary without opening a separate “pro terminal.”
 
+### Manual ingest history
+
+1. Slim creates a running history row before calling the worker for **Ingest now**.
+2. It completes that row with the worker report or failure text and full timestamps, then retains
+   only the newest 20 manual rows. Scheduled ingestion creates no history row.
+3. **Ingest logs** shows layer ingested/cached/missing counts, Historical quote/bar breakdown,
+   warnings, and missing symbols. The module panel shows none of that operational report.
+4. Completion refreshes both books, context previews, elapsed status, and history, then flashes
+   `Ingest finished.` in the utility bar.
+
 ### News context (lightweight)
 
 - Worker may cache NewsItems tagged to instruments for agent and UI context.
