@@ -9,7 +9,8 @@ Audience: product / planning. Concepts, rules, and invariants for Tradai.
 | **Portfolio** | The single local book of European and US holdings. One portfolio in v1 — no multi-portfolio. |
 | **Tracker** | The second book: names the operator is considering but does not own (`0019`). Ingested and researched like the portfolio; still the universe a `better_use` sell may point at (`0016`). |
 | **Instrument** | A tradeable identity: ISIN (when available), symbol, MIC/exchange, currency, name; **kind** = equity or ETF; **region/venue** covers EU and US listings. ETFs are in scope when listed and bought on the same regular exchange markets as stocks (not a separate venue class). |
-| **Holding** | A position in the portfolio: quantity, average cost, optional notes; references an Instrument. |
+| **Holding** | An open position in the portfolio: quantity, average cost, optional notes; references an Instrument. Exists only while the FIFO open quantity is above zero (`0031`). |
+| **Closed position** | An instrument whose transactions are all sold out. Derived from the ledger; keeps its transactions and realised P&L (`0031`). |
 | **Thesis** | The recorded reason a Holding is owned, plus named falsifiers. Versioned. Claude drafts and records it automatically; the operator may edit it (`0018`). |
 | **Tracked name** | An entry on the Tracker. Carries an Instrument and the date it was tracked. Buying it archives the entry (auto-promote, `0019`; note removal, `0024`). Was "watchlist candidate" before `0019`. |
 | **Book** | Which of the two a subject belongs to: `portfolio` or `tracker`. Recorded on every Recommendation, because a name can move between them. |
@@ -25,15 +26,18 @@ Audience: product / planning. Concepts, rules, and invariants for Tradai.
 - **Actions:** `buy` | `sell` | `hold` | `watch`, plus `drop` — tracker-only (`0019`): stop spending attention on a
   name never owned. It is a suggestion, never a deletion.
 - **Reason (required):** every action carries why, because the choice Jev is offered *is* the reason. Sells are
-  restricted to `thesis_broken` | `better_use` (`0013`).
+  restricted to `thesis_broken` | `better_use` (`0013`) | `take_profit` (`0030`).
 - **Two choice sets (`0019`):** a holding is offered buy/sell/hold/watch; a tracked name is offered
   `buy_now` | `wait_better_entry` | `keep_watching` | `drop_lost_interest`. Hold and sell are unrepresentable for
   something you don't own. Both books ride one Jev call per lens — the criteria are per question.
-- **Horizons are per book (`0020`):** holdings are `6m` | `12m` | `24m` (`0014`) — `3m` dropped as below the
-  operator's holding period, `24m` backing the `no_recovery_24m` loss gate. The tracker is `1m` | `3m` | `6m` —
+- **Horizons are per book (`0020`):** holdings are `3m` | `6m` | `12m` (`0030`; `6m` | `12m` | `24m` under
+  `0014`) — the portfolio's job is spotting chances to take profits, and `12m` backs the `no_recovery_12m`
+  loss label. The tracker is `1m` | `3m` | `6m` —
   an entry-timing question with no loss gate to back, not a multi-year thesis one.
-- **Sell doctrine:** price action, momentum and concentration are **never** valid sell reasons. A sell at an unrealised
-  loss carries a gate label: `offset_same_year` or `no_recovery_24m` (`0013`). **Not enforced in code** — `0018`
+- **Sell doctrine:** price action, momentum and concentration are **never** valid reasons to sell at a loss. At a
+  gain, the size of the gain, a stretched run and fading momentum may support a `take_profit` sell (`0030`); the
+  operator's targets live in the portfolio profile, not in code. A sell at an unrealised loss carries a gate label:
+  `offset_same_year` or `no_recovery_12m` (`0013`, `0030`; `no_recovery_24m` on older rows). **Not enforced in code** — `0018`
   removed the gate; `domain/doctrine.py` labels the result for the log and changes nothing. Tracker rows carry no gate at
   all, having no position to be at a loss on.
 - **Role of Claude Agent CLI:** **researcher** — ingests book/market context, explores scenarios, builds Jev requests, writes research, emits info-needs for ingest planning (subscription auth)

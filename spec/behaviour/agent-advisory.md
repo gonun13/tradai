@@ -8,8 +8,8 @@ Roles are locked in `decisions/0009-claude-researcher-jev-decider.md`: **Claude 
 
 - Run once per day after US markets close without the operator babysitting.
 - Combine **full book context** (positions, costs, weights, held-days, cash, realised YTD gains, totals in the run's snapshotted display currency) with
-  the recorded thesis, news and local technicals into buy / sell / hold / watch advice for **6m / 12m / 24m**
-  horizons on holdings (`0014`), and buy_now / wait_better_entry / keep_watching / drop_lost_interest advice for
+  the recorded thesis, news and local technicals into buy / sell / hold / watch advice for **3m / 6m / 12m**
+  horizons on holdings (`0030`), looking above all for chances to take profits, and buy_now / wait_better_entry / keep_watching / drop_lost_interest advice for
   **1m / 3m / 6m** horizons on the tracker (`0020`) — equities and ETFs. Every action carries a **reason** (Jev's
   choice set encodes it); a sell also gets an informational **loss_gate** label. Neither is enforced by code
   (`0018`) — Claude and Jev are given the investor profile and the sell-doctrine guidance directly and decide.
@@ -42,8 +42,9 @@ Roles are locked in `decisions/0009-claude-researcher-jev-decider.md`: **Claude 
    `historical`, `fundamentals`, `technicals`, `news`, then `combined`. Each evidence lens sees only its own
    layer card and Claude's note on it; `combined` sees the position, every note, and the four evidence
    verdicts. `fundamentals` absorbed the `thesis` lens — the `prices` lens stays gone, because judging on
-   quote and P&L alone is precisely the reasoning `0013` rejects; `historical` is context, never by itself a
-   reason to sell. Tracked names get the same five lenses (`0022`, `0027`), their own choice set
+   quote and P&L alone is precisely the reasoning `0013` rejects; P&L reaches the decision through `combined`,
+   which weighs a gain against the upside left when considering `sell_take_profit` (`0030`). `historical` is
+   context, never by itself a reason to sell. Tracked names get the same five lenses (`0022`, `0027`), their own choice set
    (`buy_now` / `wait_better_entry` / `keep_watching` / `drop_lost_interest`), and the investor profile alone.
    Shared guidance (mandate, lens focus, book guidance, full choice definitions) travels once per call; each
    question names only its subject, horizon and book, so both books still ride **one call per lens**.

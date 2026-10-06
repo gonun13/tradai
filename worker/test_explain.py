@@ -48,7 +48,7 @@ class ExplainTests(unittest.TestCase):
              "top": {"watch": 0.8, "hold": 0.11}},
             first["decision"]["12m"],
         )
-        self.assertEqual("6m:hold, 12m:hold, 24m:hold", first["lenses"]["news"])
+        self.assertEqual("3m:hold, 6m:hold, 12m:hold", first["lenses"]["news"])
         self.assertIn("EXSA.DE", prompt)
         self.assertIn("HEADLINES:", prompt)
         self.assertIn("Book-wide synthesis.", prompt)

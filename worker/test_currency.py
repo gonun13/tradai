@@ -32,7 +32,8 @@ CREATE TABLE tracker (id INTEGER PRIMARY KEY, symbol TEXT, instrument_id INTEGER
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);
 CREATE TABLE realized_disposals (id INTEGER PRIMARY KEY, instrument_id INTEGER,
   sell_transaction_id INTEGER, trade_date TEXT, quantity REAL, proceeds REAL, cost REAL,
-  realized_pnl REAL, currency TEXT, created_at TEXT);
+  realized_pnl REAL, currency TEXT, created_at TEXT, proceeds_eur REAL, cost_eur REAL,
+  realized_pnl_eur REAL);
 CREATE TABLE theses (id INTEGER PRIMARY KEY, instrument_id INTEGER, thesis TEXT,
   falsifiers_json TEXT, status TEXT, version INTEGER, source TEXT, agent_run_id INTEGER,
   created_at TEXT, approved_at TEXT, superseded_at TEXT);
@@ -104,6 +105,34 @@ class CurrencyContextTests(unittest.TestCase):
         self.assertIsNone(incomplete["portfolio_market_value_display"])
         self.assertIsNone(incomplete["portfolio_cost_display"])
         self.assertTrue(all(h["weight_pct"] is None for h in incomplete["holdings"]))
+
+    def test_realized_ytd_sums_locked_eur_and_converts_to_display(self):
+        # 0031: a USD gain natively can be an EUR loss; only EUR -> display uses today's rate.
+        year = datetime.now(timezone.utc).year
+        self.conn.executemany(
+            "INSERT INTO settings(key,value,updated_at) VALUES (?,?,'x')",
+            [("display_currency", "USD")],
+        )
+        self.conn.execute("INSERT INTO fx_rates VALUES ('USD', 'EUR', 0.8, 'x', 'test', 'x')")
+        self.conn.executemany(
+            "INSERT INTO realized_disposals VALUES (?,1,?,?,1,0,0,?, 'USD','x',NULL,NULL,?)",
+            [
+                (1, 11, f"{year}-02-01", 50.0, -60.0),
+                (2, 12, f"{year}-03-01", 10.0, 20.0),
+                (3, 13, f"{year - 1}-03-01", 999.0, 999.0),
+            ],
+        )
+        self.conn.commit()
+        service = AdvisoryService(self.path)
+        self.assertAlmostEqual(-50.0, service._realized_gains_ytd_display(self.conn, "USD"))
+        self.assertAlmostEqual(-40.0, service._realized_gains_ytd_display(self.conn, "EUR"))
+
+        self.conn.execute(
+            "INSERT INTO realized_disposals VALUES (4,1,14,?,1,0,0,5,'USD','x',NULL,NULL,NULL)",
+            (f"{year}-04-01",),
+        )
+        self.conn.commit()
+        self.assertIsNone(service._realized_gains_ytd_display(self.conn, "USD"))
 
     def test_refresh_requests_books_quotes_settings_and_all_display_currencies(self):
         self.conn.execute(

@@ -12,6 +12,7 @@ from domain import doctrine
 print("composite choice parsing")
 assert doctrine.split_choice("sell_thesis_broken") == ("sell", "thesis_broken")
 assert doctrine.split_choice("sell_better_use") == ("sell", "better_use")
+assert doctrine.split_choice("sell_take_profit") == ("sell", "take_profit")  # 0030
 assert doctrine.split_choice("buy_new_conviction") == ("buy", "new_conviction")
 assert doctrine.split_choice("hold") == ("hold", "thesis_intact")
 assert doctrine.split_choice("watch") == ("watch", "insufficient_evidence")
@@ -30,16 +31,18 @@ assert doctrine.split_choice("drop_lost_interest", "tracker") == ("drop", "lost_
 assert doctrine.split_choice("wait_better_entry") is None
 assert doctrine.split_choice("hold", "tracker") is None
 assert doctrine.split_choice("sell_thesis_broken", "tracker") is None
+assert doctrine.split_choice("sell_take_profit", "tracker") is None
 assert doctrine.split_choice("buy_now") is None
 print("  ok")
 
 print("\nloss-gate label — informational only, never blocks anything")
-NO_GAINS = {"6m": "sell", "12m": "sell", "24m": "sell"}
-SHORT_ONLY = {"6m": "sell", "12m": "sell", "24m": "hold"}
+# 0030: holdings are judged over 3m/6m/12m, so the no-recovery call is the 12m verdict.
+NO_GAINS = {"3m": "sell", "6m": "sell", "12m": "sell"}
+SHORT_ONLY = {"3m": "sell", "6m": "sell", "12m": "hold"}
 
 assert doctrine.label_loss_gate(pnl_pct=5.0, realized_gains_ytd_display=0, horizon_choices=NO_GAINS) == "not_at_loss"
 assert doctrine.label_loss_gate(pnl_pct=-10.0, realized_gains_ytd_display=500, horizon_choices=NO_GAINS) == "offset_same_year"
-assert doctrine.label_loss_gate(pnl_pct=-10.0, realized_gains_ytd_display=0, horizon_choices=NO_GAINS) == "no_recovery_24m"
+assert doctrine.label_loss_gate(pnl_pct=-10.0, realized_gains_ytd_display=0, horizon_choices=NO_GAINS) == "no_recovery_12m"
 assert doctrine.label_loss_gate(pnl_pct=-10.0, realized_gains_ytd_display=0, horizon_choices=SHORT_ONLY) is None
 assert doctrine.label_loss_gate(pnl_pct=None, realized_gains_ytd_display=0, horizon_choices=NO_GAINS) is None
 print("  ok")

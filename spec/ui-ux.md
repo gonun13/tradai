@@ -76,7 +76,14 @@ locations. Daily schedule and alert-policy details remain outside the Setup page
 The Portfolio holdings table keeps each row ledger-like and compact: Symbol omits region; Quote
 omits provider provenance; Cost, Value and P&L suppress duplicate native/display figures and never
 display the FX rate. **Daily %** uses a subtle green, red or neutral cell background according to
-sign, followed by a final column of small labelled edit/delete icon controls.
+sign, followed by a final column of small labelled chart/sell/edit/erase icon controls. When a
+holding has realised P&L from partial sells, the P&L cell adds a muted "realised …" line (`0031`).
+
+The Portfolio summary shows Market value, Unrealised, Realised YTD, Realised all-time and Total P&L
+(`0031`). A **Closed positions** panel follows the holdings table with the same ledger styling: one row
+per closed instrument (opened → closed, held days, quantity, cost, proceeds, realised P&L and %),
+an expandable transaction list with per-transaction delete, and a labelled erase control. Erase
+copy states that it removes the whole history and that exiting is a sell.
 
 The Tracker table uses the same **Daily %** sign treatment. Tracker has no operator-note field or
 column; its per-name Run and Remove actions are compact icons with explicit accessible labels and

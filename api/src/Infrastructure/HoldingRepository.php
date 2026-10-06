@@ -8,12 +8,21 @@ use InvalidArgumentException;
 use PDO;
 use RuntimeException;
 use Tradai\Api\Domain\FifoLedger;
+use Tradai\Api\Domain\TradeFxSource;
 
 final class HoldingRepository
 {
+    private const EPS = 1e-9;
+
     private readonly InstrumentRepository $instruments;
 
-    public function __construct(private readonly PDO $db)
+    /** @var array<string, array{rate: float, as_of: string}|null> per-request cache keyed "CCY|date" */
+    private array $fxCache = [];
+
+    /**
+     * `$fx` locks trade-date FX (0031). Without it non-EUR rates stay pending; nothing else changes.
+     */
+    public function __construct(private readonly PDO $db, private readonly ?TradeFxSource $fx = null)
     {
         $this->instruments = new InstrumentRepository($db);
     }
@@ -57,29 +66,33 @@ final class HoldingRepository
     {
         $data = $this->normalizeAcquisition($input);
         $now = gmdate('c');
+        // Network before the write lock: the new lot's rate, then any gaps in older history.
+        $fx = $this->tradeFx($data['currency'], $data['trade_date']);
+        $existingInstrument = $this->instruments->findBySymbol($data['symbol']);
+        if ($existingInstrument !== null) {
+            $this->fillMissingTradeFx((int) $existingInstrument['id']);
+        }
 
         $this->db->beginTransaction();
         try {
-            // One holding line per ticker: same symbol appends a lot and re-averages.
+            // One holding line per ticker: same symbol appends a lot and re-averages. A closed
+            // position's instrument is reused, so a re-entry continues the same history (0031).
             $existingHolding = $this->findHoldingIdBySymbol($data['symbol']);
             if ($existingHolding !== null) {
-                $holdingId = $existingHolding['holding_id'];
                 $instrumentId = $existingHolding['instrument_id'];
                 $this->touchInstrument($instrumentId, $data, $now);
-                $this->insertBuyTransaction($instrumentId, $data, $now);
-                $this->recomputeHoldingRollup($holdingId, $instrumentId, $data['notes'], $now, mergeNotes: true);
             } else {
                 $instrumentId = $this->instruments->upsert($data, $now);
-                $this->insertBuyTransaction($instrumentId, $data, $now);
-                $holdingId = $this->insertHoldingRollup($instrumentId, $data, $now);
             }
+            $this->insertTransaction($instrumentId, 'buy', $data, $fx, $now);
+            $holdingId = $this->syncPosition($instrumentId, $now, $data['notes']);
             $this->db->commit();
         } catch (\Throwable $e) {
             $this->db->rollBack();
             throw $e;
         }
 
-        $created = $this->find($holdingId);
+        $created = $holdingId === null ? null : $this->find($holdingId);
         if ($created === null) {
             throw new RuntimeException('Failed to load created holding.');
         }
@@ -87,8 +100,11 @@ final class HoldingRepository
     }
 
     /**
+     * Edit one transaction of an open holding, plus instrument metadata. Kept for the
+     * acquisition form; `updateTransaction()` is the generic path (0031).
+     *
      * @param array<string, mixed> $input
-     * @return array<string, mixed>
+     * @return array{holding: ?array<string, mixed>, symbol: string, was_open: bool, is_open: bool}
      */
     public function update(int $id, array $input): array
     {
@@ -152,28 +168,34 @@ final class HoldingRepository
         $data = $this->normalizeAcquisition($merged);
         $now = gmdate('c');
         $instrumentId = (int) $current['instrument']['id'];
+        $previousCurrency = strtoupper((string) $current['instrument']['currency']);
+        if ($previousCurrency !== $data['currency']) {
+            // Every locked rate was for the old currency.
+            $this->db->prepare('UPDATE transactions SET fx_to_eur = NULL, fx_as_of = NULL WHERE instrument_id = :id')
+                ->execute(['id' => $instrumentId]);
+        }
+        $fx = $this->rateForEdit($tx + ['currency' => $previousCurrency], $data['currency'], $data['trade_date']);
+        $this->fillMissingTradeFx($instrumentId);
 
         $this->db->beginTransaction();
         try {
             $this->touchInstrument($instrumentId, $data, $now);
-            $this->updateBuyTransaction($txId, $data, $now);
-            $this->recomputeHoldingRollup($id, $instrumentId, $data['notes'], $now, mergeNotes: false);
+            $this->updateTransactionRow($txId, $data, $fx, $now);
+            // The acquisition form's notes field is the holding's notes (pre-0031 behaviour).
+            $holdingId = $this->syncPosition($instrumentId, $now, $data['notes'], replaceNotes: true);
             $this->db->commit();
         } catch (\Throwable $e) {
             $this->db->rollBack();
             throw $e;
         }
 
-        $updated = $this->find($id);
-        if ($updated === null) {
-            throw new RuntimeException('Failed to load updated holding.');
-        }
-        return $updated;
+        return $this->mutationResult($holdingId, (string) $current['instrument']['symbol'], true);
     }
 
     /**
-     * Returns the deleted holding's symbol so the caller can drop the name back onto the
-     * tracker it was promoted from (0019). find() is already called here anyway.
+     * Erase an open holding and its whole history — for entries made in error; exiting is a
+     * sell (0031). Returns the symbol so the caller can drop the name back onto the tracker
+     * it was promoted from (0019).
      */
     public function delete(int $id): string
     {
@@ -182,18 +204,266 @@ final class HoldingRepository
             throw new RuntimeException('Holding not found.', 404);
         }
 
+        $this->eraseHistory((int) $current['instrument']['id']);
+        return (string) $current['instrument']['symbol'];
+    }
+
+    /** Erase a closed position's history (0031). Returns its symbol. */
+    public function eraseClosed(int $instrumentId): string
+    {
+        $instrument = $this->closedInstrument($instrumentId);
+        $this->eraseHistory($instrumentId);
+        return (string) $instrument['symbol'];
+    }
+
+    /**
+     * Record a sell against an open holding (0031). FIFO consumes the oldest lots; selling
+     * more than is open on the trade date is rejected and nothing is written.
+     *
+     * @param array<string, mixed> $input trade_date, quantity, unit_price, commission?, notes?
+     * @return array{holding: ?array<string, mixed>, symbol: string, was_open: bool, is_open: bool, disposal: ?array<string, mixed>}
+     */
+    public function recordSell(int $holdingId, array $input): array
+    {
+        $current = $this->find($holdingId);
+        if ($current === null) {
+            throw new RuntimeException('Holding not found.', 404);
+        }
         $instrumentId = (int) $current['instrument']['id'];
+        $currency = (string) $current['instrument']['currency'];
+        $data = $this->normalizeTrade($input);
+        $now = gmdate('c');
+        $fx = $this->tradeFx($currency, $data['trade_date']);
+        $this->fillMissingTradeFx($instrumentId);
+
         $this->db->beginTransaction();
         try {
-            $this->db->prepare('DELETE FROM transactions WHERE instrument_id = :id')->execute(['id' => $instrumentId]);
-            $this->db->prepare('DELETE FROM holdings WHERE id = :id')->execute(['id' => $id]);
+            $txId = $this->insertTransaction($instrumentId, 'sell', $data, $fx, $now);
+            $newHoldingId = $this->syncPosition($instrumentId, $now);
             $this->db->commit();
         } catch (\Throwable $e) {
             $this->db->rollBack();
             throw $e;
         }
 
-        return (string) $current['instrument']['symbol'];
+        $result = $this->mutationResult($newHoldingId, (string) $current['instrument']['symbol'], true);
+        $result['disposal'] = $this->disposalForSell($txId, $currency);
+        return $result;
+    }
+
+    /**
+     * Edit any transaction, buy or sell (0031). The ledger is re-walked; an oversold result
+     * is rejected.
+     *
+     * @param array<string, mixed> $input trade_date?, quantity?, unit_price?, commission?, notes?
+     * @return array{holding: ?array<string, mixed>, symbol: string, was_open: bool, is_open: bool}
+     */
+    public function updateTransaction(int $txId, array $input): array
+    {
+        $tx = $this->transactionWithInstrument($txId);
+        $merged = array_merge(
+            [
+                'trade_date' => $tx['trade_date'],
+                'quantity' => $tx['quantity'],
+                'unit_price' => $tx['unit_price'],
+                'commission' => $tx['commission'],
+                'notes' => $tx['notes'],
+            ],
+            array_intersect_key($input, array_flip(['trade_date', 'quantity', 'unit_price', 'commission', 'notes']))
+        );
+        $data = $this->normalizeTrade($merged);
+        $instrumentId = (int) $tx['instrument_id'];
+        $wasOpen = $this->openHoldingId($instrumentId) !== null;
+        $fx = $this->rateForEdit($tx, (string) $tx['currency'], $data['trade_date']);
+        $this->fillMissingTradeFx($instrumentId);
+        $now = gmdate('c');
+
+        $this->db->beginTransaction();
+        try {
+            $this->updateTransactionRow($txId, $data, $fx, $now);
+            $holdingId = $this->syncPosition($instrumentId, $now);
+            $this->db->commit();
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+
+        return $this->mutationResult($holdingId, (string) $tx['symbol'], $wasOpen);
+    }
+
+    /**
+     * Delete one transaction (0031). Removing the closing sell reopens the position; removing
+     * a buy that a later sell depends on is rejected.
+     *
+     * @return array{holding: ?array<string, mixed>, symbol: string, was_open: bool, is_open: bool}
+     */
+    public function deleteTransaction(int $txId): array
+    {
+        $tx = $this->transactionWithInstrument($txId);
+        $instrumentId = (int) $tx['instrument_id'];
+        $wasOpen = $this->openHoldingId($instrumentId) !== null;
+        $now = gmdate('c');
+
+        $this->db->beginTransaction();
+        try {
+            $this->db->prepare('DELETE FROM transactions WHERE id = :id')->execute(['id' => $txId]);
+            $holdingId = $this->syncPosition($instrumentId, $now);
+            $this->db->commit();
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+
+        return $this->mutationResult($holdingId, (string) $tx['symbol'], $wasOpen);
+    }
+
+    /**
+     * Instruments with history and no open position (0031), newest close first.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function closedPositions(): array
+    {
+        $rows = $this->db->query(
+            'SELECT i.id, i.isin, i.symbol, i.mic, i.currency, i.name, i.kind, i.region
+             FROM instruments i
+             WHERE EXISTS (SELECT 1 FROM transactions t WHERE t.instrument_id = i.id)
+               AND NOT EXISTS (SELECT 1 FROM holdings h WHERE h.instrument_id = i.id)'
+        )->fetchAll();
+        $display = CurrencyRates::display($this->db);
+
+        $out = [];
+        foreach ($rows as $row) {
+            $instrumentId = (int) $row['id'];
+            $raw = $this->rawTransactions($instrumentId);
+            $ledger = FifoLedger::walk($raw);
+            if ($ledger['quantity'] > self::EPS) {
+                continue;
+            }
+            $bought = 0.0;
+            foreach ($raw as $t) {
+                if ($t['side'] === 'buy') {
+                    $bought += (float) $t['quantity'];
+                }
+            }
+            $sold = 0.0;
+            $cost = 0.0;
+            $proceeds = 0.0;
+            $realized = 0.0;
+            $realizedEur = 0.0;
+            foreach ($ledger['disposals'] as $d) {
+                $sold += (float) $d['quantity'];
+                $cost += (float) $d['cost'];
+                $proceeds += (float) $d['proceeds'];
+                $realized += (float) $d['realized_pnl'];
+                $realizedEur = ($realizedEur === null || $d['realized_pnl_eur'] === null)
+                    ? null
+                    : $realizedEur + (float) $d['realized_pnl_eur'];
+            }
+            $out[] = [
+                'instrument' => [
+                    'id' => $instrumentId,
+                    'isin' => $row['isin'],
+                    'symbol' => $row['symbol'],
+                    'mic' => $row['mic'],
+                    'currency' => (string) $row['currency'],
+                    'name' => $row['name'],
+                    'kind' => $row['kind'],
+                    'region' => $row['region'],
+                ],
+                'opened_at' => $ledger['opened_at'],
+                'closed_at' => $ledger['closed_at'],
+                'held_days' => $this->daysBetween($ledger['opened_at'], $ledger['closed_at']),
+                'quantity_bought' => $bought,
+                'quantity_sold' => $sold,
+                'cost_native' => $cost,
+                'proceeds_native' => $proceeds,
+                'realized_pnl_native' => $realized,
+                'realized_pnl_eur' => $realizedEur === null ? null : round($realizedEur, 2),
+                'realized_pnl_display' => RealizedGains::eurToDisplay($this->db, $realizedEur, $display),
+                'realized_pct' => $cost > 0 ? ($realized / $cost) * 100.0 : null,
+                'display_currency' => $display,
+                'transactions' => $this->transactionsForInstrument($instrumentId),
+            ];
+        }
+        usort($out, static fn (array $a, array $b): int => strcmp((string) $b['closed_at'], (string) $a['closed_at']));
+        return $out;
+    }
+
+    /**
+     * Book-level P&L for `GET /holdings` (0031). Unrealised uses today's FX on both sides;
+     * realised is locked EUR. Any pending constituent makes that figure null.
+     *
+     * @param list<array<string, mixed>> $holdings rows from all()
+     * @return array{unrealized_pnl_display: ?float, realized_ytd_display: ?float, realized_all_time_display: ?float, total_pnl_display: ?float}
+     */
+    public function summary(array $holdings): array
+    {
+        $display = CurrencyRates::display($this->db);
+        $unrealized = 0.0;
+        foreach ($holdings as $h) {
+            if ($h['pnl_display'] === null) {
+                $unrealized = null;
+                break;
+            }
+            $unrealized += (float) $h['pnl_display'];
+        }
+        $allTime = RealizedGains::display($this->db, $display);
+
+        return [
+            'unrealized_pnl_display' => $unrealized === null ? null : round($unrealized, 2),
+            'realized_ytd_display' => RealizedGains::display($this->db, $display, gmdate('Y')),
+            'realized_all_time_display' => $allTime,
+            'total_pnl_display' => ($unrealized === null || $allTime === null) ? null : round($unrealized + $allTime, 2),
+        ];
+    }
+
+    /**
+     * Fetch trade-date rates still missing (0031) and re-sync each instrument that gained
+     * one. Best effort: a rate that stays unavailable leaves its figures pending.
+     *
+     * @return int number of transactions that received a rate
+     */
+    public function fillMissingTradeFx(?int $instrumentId = null): int
+    {
+        $sql = 'SELECT t.id, t.instrument_id, t.trade_date, i.currency
+                FROM transactions t INNER JOIN instruments i ON i.id = t.instrument_id
+                WHERE t.fx_to_eur IS NULL';
+        $params = [];
+        if ($instrumentId !== null) {
+            $sql .= ' AND t.instrument_id = :id';
+            $params['id'] = $instrumentId;
+        }
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($params);
+        $pending = $stmt->fetchAll();
+
+        $upd = $this->db->prepare('UPDATE transactions SET fx_to_eur = :rate, fx_as_of = :as_of WHERE id = :id');
+        $filled = 0;
+        $touched = [];
+        foreach ($pending as $row) {
+            $fx = $this->tradeFx((string) $row['currency'], (string) $row['trade_date']);
+            if ($fx === null) {
+                continue;
+            }
+            $upd->execute(['rate' => $fx['rate'], 'as_of' => $fx['as_of'], 'id' => (int) $row['id']]);
+            $filled++;
+            $touched[(int) $row['instrument_id']] = true;
+        }
+
+        // Re-sync now rather than relying on the caller's write: that write may be rejected.
+        $now = gmdate('c');
+        foreach (array_keys($touched) as $id) {
+            $this->db->beginTransaction();
+            try {
+                $this->syncPosition($id, $now);
+                $this->db->commit();
+            } catch (\Throwable $e) {
+                $this->db->rollBack();
+                throw $e;
+            }
+        }
+        return $filled;
     }
 
     /**
@@ -240,29 +510,11 @@ final class HoldingRepository
             $region = null;
         }
 
-        $tradeDate = trim((string) ($input['trade_date'] ?? ''));
-        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $tradeDate)) {
-            throw new InvalidArgumentException('trade_date must be YYYY-MM-DD');
-        }
-
-        $quantity = $input['quantity'] ?? null;
-        $unitPrice = $input['unit_price'] ?? $input['avg_cost'] ?? null;
-        $commission = $input['commission'] ?? 0;
-
-        if (!is_numeric($quantity) || (float) $quantity <= 0) {
-            throw new InvalidArgumentException('quantity must be a positive number');
-        }
-        if (!is_numeric($unitPrice) || (float) $unitPrice < 0) {
-            throw new InvalidArgumentException('unit_price must be a non-negative number');
-        }
-        if (!is_numeric($commission) || (float) $commission < 0) {
-            throw new InvalidArgumentException('commission must be a non-negative number');
-        }
+        $trade = $this->normalizeTrade($input);
 
         $isin = $this->nullableString($input['isin'] ?? null);
         $mic = $this->nullableString($input['mic'] ?? null);
         $name = $this->nullableString($input['name'] ?? null);
-        $notes = $this->nullableString($input['notes'] ?? null);
 
         if ($isin !== null) {
             $isin = strtoupper($isin);
@@ -279,47 +531,91 @@ final class HoldingRepository
             'name' => $name,
             'kind' => $kind,
             'region' => $region,
-            'notes' => $notes,
+        ] + $trade;
+    }
+
+    /**
+     * The fields every transaction carries, buy or sell.
+     *
+     * @param array<string, mixed> $input
+     * @return array{trade_date: string, quantity: float, unit_price: float, commission: float, notes: ?string}
+     */
+    private function normalizeTrade(array $input): array
+    {
+        $tradeDate = trim((string) ($input['trade_date'] ?? ''));
+        [$y, $m, $d] = array_map('intval', explode('-', $tradeDate . '--'));
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $tradeDate) || !checkdate($m, $d, $y)) {
+            throw new InvalidArgumentException('trade_date must be YYYY-MM-DD');
+        }
+
+        $quantity = $input['quantity'] ?? null;
+        $unitPrice = $input['unit_price'] ?? $input['avg_cost'] ?? null;
+        $commission = $input['commission'] ?? 0;
+        if ($commission === null || $commission === '') {
+            $commission = 0;
+        }
+
+        if (!is_numeric($quantity) || (float) $quantity <= 0) {
+            throw new InvalidArgumentException('quantity must be a positive number');
+        }
+        if (!is_numeric($unitPrice) || (float) $unitPrice < 0) {
+            throw new InvalidArgumentException('unit_price must be a non-negative number');
+        }
+        if (!is_numeric($commission) || (float) $commission < 0) {
+            throw new InvalidArgumentException('commission must be a non-negative number');
+        }
+
+        return [
             'trade_date' => $tradeDate,
             'quantity' => (float) $quantity,
             'unit_price' => (float) $unitPrice,
             'commission' => (float) $commission,
+            'notes' => $this->nullableString($input['notes'] ?? null),
         ];
     }
 
     /**
-     * @param array<string, mixed> $data
+     * @param array<string, mixed> $data trade fields from normalizeTrade()/normalizeAcquisition()
+     * @param array{rate: float, as_of: string}|null $fx
      */
-    private function insertBuyTransaction(int $instrumentId, array $data, string $now): void
+    private function insertTransaction(int $instrumentId, string $side, array $data, ?array $fx, string $now): int
     {
         $stmt = $this->db->prepare(
             'INSERT INTO transactions
-                (instrument_id, side, trade_date, quantity, unit_price, commission, notes, created_at, updated_at)
+                (instrument_id, side, trade_date, quantity, unit_price, commission, notes,
+                 fx_to_eur, fx_as_of, created_at, updated_at)
              VALUES
-                (:instrument_id, \'buy\', :trade_date, :quantity, :unit_price, :commission, :notes, :created_at, :updated_at)'
+                (:instrument_id, :side, :trade_date, :quantity, :unit_price, :commission, :notes,
+                 :fx_to_eur, :fx_as_of, :created_at, :updated_at)'
         );
         $stmt->execute([
             'instrument_id' => $instrumentId,
+            'side' => $side,
             'trade_date' => $data['trade_date'],
             'quantity' => $data['quantity'],
             'unit_price' => $data['unit_price'],
             'commission' => $data['commission'],
             'notes' => $data['notes'],
+            'fx_to_eur' => $fx['rate'] ?? null,
+            'fx_as_of' => $fx['as_of'] ?? null,
             'created_at' => $now,
             'updated_at' => $now,
         ]);
+        return (int) $this->db->lastInsertId();
     }
 
     /**
      * @param array<string, mixed> $data
+     * @param array{rate: float, as_of: string}|null $fx
      */
-    private function updateBuyTransaction(int $transactionId, array $data, string $now): void
+    private function updateTransactionRow(int $transactionId, array $data, ?array $fx, string $now): void
     {
         $stmt = $this->db->prepare(
             'UPDATE transactions
              SET trade_date = :trade_date, quantity = :quantity, unit_price = :unit_price,
-                 commission = :commission, notes = :notes, updated_at = :updated_at
-             WHERE id = :id AND side = \'buy\''
+                 commission = :commission, notes = :notes, fx_to_eur = :fx_to_eur,
+                 fx_as_of = :fx_as_of, updated_at = :updated_at
+             WHERE id = :id'
         );
         $stmt->execute([
             'id' => $transactionId,
@@ -328,10 +624,12 @@ final class HoldingRepository
             'unit_price' => $data['unit_price'],
             'commission' => $data['commission'],
             'notes' => $data['notes'],
+            'fx_to_eur' => $fx['rate'] ?? null,
+            'fx_as_of' => $fx['as_of'] ?? null,
             'updated_at' => $now,
         ]);
         if ($stmt->rowCount() === 0) {
-            throw new RuntimeException('Acquisition lot not found.', 404);
+            throw new RuntimeException('Transaction not found.', 404);
         }
     }
 
@@ -387,32 +685,51 @@ final class HoldingRepository
         ]);
     }
 
-    private function recomputeHoldingRollup(
-        int $holdingId,
+    /**
+     * Re-walk the instrument's FIFO ledger and make the rollup match it (0031): a holdings row
+     * exists only while open quantity > 0. Must run inside the caller's DB transaction; an
+     * oversold ledger throws so that transaction rolls back.
+     *
+     * @return int|null the open holding id, or null when the position is closed
+     */
+    private function syncPosition(
         int $instrumentId,
-        ?string $notes,
         string $now,
-        bool $mergeNotes = false,
-    ): void {
-        // FIFO over *all* sides. The previous aggregate filtered `side = 'buy'`, so sells
-        // never reduced quantity or cost basis and realised P&L was unknowable (0013).
+        ?string $notes = null,
+        bool $replaceNotes = false,
+    ): ?int {
         $ledger = FifoLedger::walk($this->rawTransactions($instrumentId));
-        $qty = $ledger['quantity'];
-        $totalCost = $ledger['total_cost'];
-        $avg = $ledger['avg_cost'];
+        if ($ledger['oversold_quantity'] > self::EPS) {
+            throw new InvalidArgumentException(sprintf(
+                'Sell exceeds the open quantity on %s by %s.',
+                (string) $ledger['oversold_on'],
+                rtrim(rtrim(number_format($ledger['oversold_quantity'], 6, '.', ''), '0'), '.')
+            ));
+        }
 
         $this->persistDisposals($instrumentId, $ledger['disposals'], $now);
 
-        if ($mergeNotes && $notes !== null && $notes !== '') {
-            $cur = $this->db->prepare('SELECT notes FROM holdings WHERE id = :id');
-            $cur->execute(['id' => $holdingId]);
-            $existing = $cur->fetch();
-            $prev = is_array($existing) ? trim((string) ($existing['notes'] ?? '')) : '';
-            if ($prev !== '' && $prev !== $notes) {
-                $notes = $prev . "\n" . $notes;
-            } elseif ($prev !== '' && ($notes === null || $notes === '')) {
-                $notes = $prev;
+        $cur = $this->db->prepare('SELECT id, notes FROM holdings WHERE instrument_id = :id');
+        $cur->execute(['id' => $instrumentId]);
+        $existing = $cur->fetch();
+
+        if ($ledger['quantity'] <= self::EPS) {
+            // Full exit: the rollup goes, the transactions and disposals stay.
+            if ($existing !== false) {
+                $this->db->prepare('DELETE FROM holdings WHERE id = :id')->execute(['id' => (int) $existing['id']]);
             }
+            return null;
+        }
+
+        $prev = $existing === false ? '' : trim((string) ($existing['notes'] ?? ''));
+        if ($replaceNotes) {
+            $merged = $notes;
+        } elseif ($notes !== null && $notes !== '' && $prev !== '' && $prev !== $notes) {
+            $merged = $prev . "\n" . $notes;
+        } elseif ($notes !== null && $notes !== '' && $prev === '') {
+            $merged = $notes;
+        } else {
+            $merged = $prev === '' ? null : $prev;
         }
 
         $realized = 0.0;
@@ -420,32 +737,45 @@ final class HoldingRepository
             $realized += (float) $d['realized_pnl'];
         }
 
-        $h = $this->db->prepare(
+        $values = [
+            'quantity' => $ledger['quantity'],
+            'avg_cost' => $ledger['avg_cost'],
+            'total_cost' => $ledger['total_cost'],
+            'first_trade_date' => $ledger['first_trade_date'],
+            'open_lot_count' => $ledger['lot_count'],
+            'realized_pnl_native' => $realized,
+            'notes' => $merged,
+            'updated_at' => $now,
+        ];
+
+        if ($existing === false) {
+            $this->db->prepare(
+                'INSERT INTO holdings
+                    (instrument_id, quantity, avg_cost, total_cost, first_trade_date, open_lot_count,
+                     realized_pnl_native, notes, created_at, updated_at)
+                 VALUES
+                    (:instrument_id, :quantity, :avg_cost, :total_cost, :first_trade_date, :open_lot_count,
+                     :realized_pnl_native, :notes, :created_at, :updated_at)'
+            )->execute($values + ['instrument_id' => $instrumentId, 'created_at' => $now]);
+            return (int) $this->db->lastInsertId();
+        }
+
+        $this->db->prepare(
             'UPDATE holdings
              SET quantity = :quantity, avg_cost = :avg_cost, total_cost = :total_cost,
                  first_trade_date = :first_trade_date, open_lot_count = :open_lot_count,
                  realized_pnl_native = :realized_pnl_native,
                  notes = :notes, updated_at = :updated_at
              WHERE id = :id'
-        );
-        $h->execute([
-            'id' => $holdingId,
-            'quantity' => $qty,
-            'avg_cost' => $avg,
-            'total_cost' => $totalCost,
-            'first_trade_date' => $ledger['first_trade_date'],
-            'open_lot_count' => $ledger['lot_count'],
-            'realized_pnl_native' => $realized,
-            'notes' => $notes,
-            'updated_at' => $now,
-        ]);
+        )->execute($values + ['id' => (int) $existing['id']]);
+        return (int) $existing['id'];
     }
 
     /** @return list<array<string, mixed>> */
     private function rawTransactions(int $instrumentId): array
     {
         $stmt = $this->db->prepare(
-            'SELECT id, side, trade_date, quantity, unit_price, commission
+            'SELECT id, side, trade_date, quantity, unit_price, commission, fx_to_eur
              FROM transactions
              WHERE instrument_id = :id
              ORDER BY trade_date ASC, id ASC'
@@ -476,10 +806,12 @@ final class HoldingRepository
         $ins = $this->db->prepare(
             'INSERT INTO realized_disposals
                 (instrument_id, sell_transaction_id, trade_date, quantity,
-                 proceeds, cost, realized_pnl, currency, created_at)
+                 proceeds, cost, realized_pnl, currency,
+                 proceeds_eur, cost_eur, realized_pnl_eur, created_at)
              VALUES
                 (:instrument_id, :sell_transaction_id, :trade_date, :quantity,
-                 :proceeds, :cost, :realized_pnl, :currency, :created_at)'
+                 :proceeds, :cost, :realized_pnl, :currency,
+                 :proceeds_eur, :cost_eur, :realized_pnl_eur, :created_at)'
         );
         foreach ($disposals as $d) {
             $ins->execute([
@@ -491,32 +823,156 @@ final class HoldingRepository
                 'cost' => (float) $d['cost'],
                 'realized_pnl' => (float) $d['realized_pnl'],
                 'currency' => $currency,
+                'proceeds_eur' => $d['proceeds_eur'],
+                'cost_eur' => $d['cost_eur'],
+                'realized_pnl_eur' => $d['realized_pnl_eur'],
                 'created_at' => $now,
             ]);
         }
     }
 
-    /**
-     * @param array<string, mixed> $data
-     */
-    private function insertHoldingRollup(int $instrumentId, array $data, string $now): int
+    private function eraseHistory(int $instrumentId): void
     {
-        $lotCost = $data['quantity'] * $data['unit_price'] + $data['commission'];
-        $avg = $lotCost / $data['quantity'];
+        $this->db->beginTransaction();
+        try {
+            foreach (['realized_disposals', 'transactions', 'holdings'] as $table) {
+                $this->db->prepare('DELETE FROM ' . $table . ' WHERE instrument_id = :id')
+                    ->execute(['id' => $instrumentId]);
+            }
+            $this->db->commit();
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+    }
+
+    /** @return array<string, mixed> */
+    private function closedInstrument(int $instrumentId): array
+    {
+        if ($this->openHoldingId($instrumentId) !== null) {
+            throw new RuntimeException('Position is still open — erase it from Holdings.', 409);
+        }
         $stmt = $this->db->prepare(
-            'INSERT INTO holdings (instrument_id, quantity, avg_cost, total_cost, notes, created_at, updated_at)
-             VALUES (:instrument_id, :quantity, :avg_cost, :total_cost, :notes, :created_at, :updated_at)'
+            'SELECT i.id, i.symbol FROM instruments i
+             WHERE i.id = :id AND EXISTS (SELECT 1 FROM transactions t WHERE t.instrument_id = i.id)'
         );
-        $stmt->execute([
-            'instrument_id' => $instrumentId,
-            'quantity' => $data['quantity'],
-            'avg_cost' => $avg,
-            'total_cost' => $lotCost,
-            'notes' => $data['notes'],
-            'created_at' => $now,
-            'updated_at' => $now,
-        ]);
-        return (int) $this->db->lastInsertId();
+        $stmt->execute(['id' => $instrumentId]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            throw new RuntimeException('Closed position not found.', 404);
+        }
+        return $row;
+    }
+
+    private function openHoldingId(int $instrumentId): ?int
+    {
+        $stmt = $this->db->prepare('SELECT id FROM holdings WHERE instrument_id = :id');
+        $stmt->execute(['id' => $instrumentId]);
+        $id = $stmt->fetchColumn();
+        return $id === false ? null : (int) $id;
+    }
+
+    /** @return array<string, mixed> */
+    private function transactionWithInstrument(int $txId): array
+    {
+        $stmt = $this->db->prepare(
+            'SELECT t.id, t.instrument_id, t.side, t.trade_date, t.quantity, t.unit_price, t.commission,
+                    t.notes, t.fx_to_eur, t.fx_as_of, i.symbol, i.currency
+             FROM transactions t INNER JOIN instruments i ON i.id = t.instrument_id
+             WHERE t.id = :id'
+        );
+        $stmt->execute(['id' => $txId]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            throw new RuntimeException('Transaction not found.', 404);
+        }
+        return $row;
+    }
+
+    /**
+     * @return array{holding: ?array<string, mixed>, symbol: string, was_open: bool, is_open: bool}
+     */
+    private function mutationResult(?int $holdingId, string $symbol, bool $wasOpen): array
+    {
+        return [
+            'holding' => $holdingId === null ? null : $this->find($holdingId),
+            'symbol' => $symbol,
+            'was_open' => $wasOpen,
+            'is_open' => $holdingId !== null,
+        ];
+    }
+
+    /** @return array<string, mixed>|null */
+    private function disposalForSell(int $sellTxId, string $currency): ?array
+    {
+        $stmt = $this->db->prepare(
+            'SELECT trade_date, quantity, proceeds, cost, realized_pnl, proceeds_eur, cost_eur, realized_pnl_eur
+             FROM realized_disposals WHERE sell_transaction_id = :id'
+        );
+        $stmt->execute(['id' => $sellTxId]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            return null;
+        }
+        $eur = $row['realized_pnl_eur'] === null ? null : (float) $row['realized_pnl_eur'];
+        return [
+            'trade_date' => $row['trade_date'],
+            'quantity' => (float) $row['quantity'],
+            'currency' => $currency,
+            'proceeds_native' => (float) $row['proceeds'],
+            'cost_native' => (float) $row['cost'],
+            'realized_pnl_native' => (float) $row['realized_pnl'],
+            'realized_pnl_eur' => $eur,
+            'realized_pnl_display' => RealizedGains::eurToDisplay($this->db, $eur, CurrencyRates::display($this->db)),
+            'display_currency' => CurrencyRates::display($this->db),
+        ];
+    }
+
+    /**
+     * Rate for `$currency` on `$date`: 1.0 for EUR, else the injected source (cached per
+     * request). Null when no source is configured or it has no rate.
+     *
+     * @return array{rate: float, as_of: string}|null
+     */
+    private function tradeFx(string $currency, string $date): ?array
+    {
+        $currency = strtoupper(trim($currency));
+        if ($currency === 'EUR') {
+            return ['rate' => 1.0, 'as_of' => $date];
+        }
+        if ($this->fx === null) {
+            return null;
+        }
+        $key = $currency . '|' . $date;
+        if (!array_key_exists($key, $this->fxCache)) {
+            $this->fxCache[$key] = $this->fx->rateToEurOn($currency, $date);
+        }
+        return $this->fxCache[$key];
+    }
+
+    /**
+     * Keep a transaction's locked rate unless its date or currency changed.
+     *
+     * @param array<string, mixed> $tx current row (needs trade_date, fx_to_eur, fx_as_of)
+     * @return array{rate: float, as_of: string}|null
+     */
+    private function rateForEdit(array $tx, string $currency, string $tradeDate): ?array
+    {
+        $sameCurrency = !isset($tx['currency']) || strtoupper((string) $tx['currency']) === strtoupper($currency);
+        if ($sameCurrency && $tx['trade_date'] === $tradeDate && ($tx['fx_to_eur'] ?? null) !== null) {
+            return ['rate' => (float) $tx['fx_to_eur'], 'as_of' => (string) ($tx['fx_as_of'] ?? $tradeDate)];
+        }
+        return $this->tradeFx($currency, $tradeDate);
+    }
+
+    private function daysBetween(?string $from, ?string $to): ?int
+    {
+        if ($from === null || $to === null) {
+            return null;
+        }
+        $a = strtotime($from);
+        $b = strtotime($to);
+        return ($a === false || $b === false) ? null : (int) floor(($b - $a) / 86400);
     }
 
     private function nullableString(mixed $value): ?string
@@ -537,7 +993,8 @@ final class HoldingRepository
         $instrumentId = (int) $row['instrument_id'];
         $transactions = $this->transactionsForInstrument($instrumentId);
         $lotCount = count($transactions);
-        $latest = $lotCount > 0 ? $transactions[$lotCount - 1] : null;
+        $buys = array_values(array_filter($transactions, static fn (array $t): bool => $t['side'] === 'buy'));
+        $latest = $buys === [] ? null : $buys[count($buys) - 1];
         $currency = (string) $row['currency'];
         $qty = (float) $row['quantity'];
         $totalCost = (float) $row['total_cost'];
@@ -562,6 +1019,8 @@ final class HoldingRepository
         $pnlDisplay = ($marketValueDisplay === null || $costDisplay === null)
             ? null
             : $marketValueDisplay - $costDisplay;
+        // 0031: realised from partial sells, locked in EUR at trade dates.
+        $realizedDisplay = RealizedGains::display($this->db, $displayCurrency, null, $instrumentId);
 
         return [
             'id' => (int) $row['id'],
@@ -583,6 +1042,10 @@ final class HoldingRepository
             'realized_pnl_native' => $row['realized_pnl_native'] !== null
                 ? (float) $row['realized_pnl_native']
                 : null,
+            'realized_pnl_display' => $realizedDisplay,
+            'total_pnl_display' => ($pnlDisplay === null || $realizedDisplay === null)
+                ? null
+                : $pnlDisplay + $realizedDisplay,
             'unit_price' => $avgCost,
             'commission' => null,
             'cost_native' => $totalCost,
@@ -773,7 +1236,8 @@ final class HoldingRepository
     private function transactionsForInstrument(int $instrumentId): array
     {
         $stmt = $this->db->prepare(
-            'SELECT id, side, trade_date, quantity, unit_price, commission, notes, created_at, updated_at
+            'SELECT id, side, trade_date, quantity, unit_price, commission, notes, fx_to_eur, fx_as_of,
+                    created_at, updated_at
              FROM transactions
              WHERE instrument_id = :instrument_id
              ORDER BY trade_date ASC, id ASC'
@@ -792,8 +1256,11 @@ final class HoldingRepository
                 'quantity' => $qty,
                 'unit_price' => $price,
                 'commission' => $commission,
-                'lot_cost' => $qty * $price + $commission,
+                // Buy: all-in cost. Sell: net proceeds (0031).
+                'lot_cost' => $row['side'] === 'sell' ? $qty * $price - $commission : $qty * $price + $commission,
                 'notes' => $row['notes'],
+                'fx_to_eur' => $row['fx_to_eur'] !== null ? (float) $row['fx_to_eur'] : null,
+                'fx_as_of' => $row['fx_as_of'],
                 'created_at' => $row['created_at'],
                 'updated_at' => $row['updated_at'],
             ];

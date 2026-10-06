@@ -14,11 +14,12 @@ from domain import materiality
 from infrastructure.adapters.claude_cli import ClaudeCliAdapter, ClaudeCliError
 from infrastructure.adapters.jev import LENSES, TRACKER_LENSES, JevAdapter, JevError
 
-# 0014: 3m sits below the operator's holding period; 24m backs the no_recovery_24m gate.
+# 0030: holdings are judged over 3m/6m/12m — the portfolio's job is spotting chances to take
+# profits, and 12m now backs the no_recovery_12m label (was 6m/12m/24m under 0014).
 # 0020: the tracker has no position and no loss gate, so it is judged over its own, shorter
 # set — an entry-timing question, not a multi-year thesis one.
 HORIZONS_BY_BOOK = {
-    "portfolio": ("6m", "12m", "24m"),
+    "portfolio": ("3m", "6m", "12m"),
     "tracker": ("1m", "3m", "6m"),
 }
 
@@ -45,10 +46,12 @@ RESEARCH_SYSTEM_PROMPT = (
     "You are the RESEARCHER for Tradai, a personal investment advisory tool. Advisory only: "
     "a separate decider (Jev) chooses every action from your notes. You have no tools — "
     "reason only from the data in the message.\n"
-    "SELL DOCTRINE (0013): the only valid reasons to sell are (a) the recorded investment "
-    "thesis is broken, or (b) the capital has a specific better named use. Price action, "
-    "momentum, moving averages, drawdown depth and concentration are NEVER reasons to sell. "
-    "A position being down is not a reason to sell it.\n"
+    "SELL DOCTRINE (0013, 0030): the only valid reasons to sell are (a) the recorded "
+    "investment thesis is broken, (b) the capital has a specific better named use, or (c) "
+    "taking profits on a position at a gain whose remaining upside no longer justifies keeping "
+    "the gain at risk. For (c), the size of the gain, a stretched run and fading momentum are "
+    "legitimate evidence. A position being down is never a reason to sell it, and price "
+    "action, momentum, drawdown depth and concentration are never reasons to sell at a loss.\n"
     "DATA: each subject has layer cards — historical (long-run returns, drawdowns, volatility, "
     "excess return vs a regional proxy), fundamentals (metrics as the source reports them, "
     "coverage, and for holdings the recorded thesis and falsifiers), technicals (RSI, SMA "
@@ -63,7 +66,8 @@ RESEARCH_SYSTEM_PROMPT = (
     "under pressure; else 'intact'. A price decline alone is NOT a broken thesis. evidence — "
     "the concrete fact, or \"no change\". better_use_target — a UNIVERSE symbol where this "
     "capital would clearly do more work, else null; never invent tickers. research — at most "
-    "2 sentences over 6m/12m/24m.\n"
+    "2 sentences over 3m/6m/12m; for a position at a gain, say whether the remaining upside "
+    "justifies keeping the gain at risk.\n"
     "TRACKED (book=tracker, not owned), in tracked_by_symbol: entry_case — at most 2 sentences "
     "on why it is worth owning against the INVESTOR PROFILE; say plainly if there is none. "
     "what_would_make_me_buy — a specific price, result or event, never \"further research\". "
@@ -90,9 +94,9 @@ EXPLAIN_SYSTEM_PROMPT = (
     "by_symbol.<SYM>.tension — one sentence when a lens verdict, the researcher's notes, or the "
     "decider's own probabilities point meaningfully the other way; otherwise null.\n"
     "market_read — 2-3 sentences on the overall market mood, drawn only from MARKET and HEADLINES.\n"
-    "SELL DOCTRINE (0013): the operator sells only on a broken thesis or a specific better use. "
-    "Price action alone is never a reason to sell, so never frame a hold on a losing position as "
-    "a mistake for that reason."
+    "SELL DOCTRINE (0013, 0030): the operator sells only on a broken thesis, a specific better "
+    "use, or to take profits on a position at a gain. Price action alone is never a reason to "
+    "sell at a loss, so never frame a hold on a losing position as a mistake for that reason."
 )
 
 EXPLAIN_SCHEMA: dict[str, Any] = {
@@ -259,10 +263,11 @@ class AdvisoryService:
                 reason TEXT NOT NULL DEFAULT 'legacy' CHECK (reason IN (
                     'thesis_broken', 'better_use',
                     'thesis_intact_underweight', 'new_conviction',
-                    'thesis_intact', 'insufficient_evidence', 'legacy'
+                    'thesis_intact', 'insufficient_evidence', 'legacy', 'take_profit'
                 )),
                 loss_gate TEXT CHECK (loss_gate IS NULL OR loss_gate IN (
-                    'not_at_loss', 'offset_same_year', 'no_recovery_24m', 'blocked'
+                    'not_at_loss', 'offset_same_year', 'no_recovery_24m', 'no_recovery_12m',
+                    'blocked'
                 )),
                 pair_symbol TEXT,
                 confidence REAL,
@@ -366,6 +371,12 @@ class AdvisoryService:
                 # 0028: Claude's plain-language why, as JSON {text, tension, market_read}.
                 "explanation": "TEXT",
             },
+        )
+        # 0031: realised P&L locked in EUR at trade dates (the API fills these).
+        self._ensure_columns(
+            conn,
+            "realized_disposals",
+            {"proceeds_eur": "REAL", "cost_eur": "REAL", "realized_pnl_eur": "REAL"},
         )
         return conn
 
@@ -1455,23 +1466,28 @@ class AdvisoryService:
     def _realized_gains_ytd_display(
         self, conn: sqlite3.Connection, display_currency: str
     ) -> float | None:
-        """This year's FIFO disposals and external override in display currency."""
+        """This year's FIFO disposals and external override in display currency.
+
+        Disposals are locked in EUR at trade dates (0031); only EUR -> display uses today's rate.
+        """
         year = str(datetime.now(timezone.utc).year)
         rows = conn.execute(
             """
-            SELECT d.realized_pnl, d.currency
+            SELECT d.realized_pnl_eur
             FROM realized_disposals d
             WHERE substr(d.trade_date, 1, 4) = ?
             """,
             (year,),
         ).fetchall()
         total = 0.0
-        for r in rows:
-            currency = (r["currency"] or "EUR").upper()
-            rate = self._fx_rate(conn, currency, display_currency)
-            if rate is None:
+        if rows:
+            eur_to_display = self._fx_rate(conn, "EUR", display_currency)
+            if eur_to_display is None:
                 return None
-            total += float(r["realized_pnl"]) * rate
+            for r in rows:
+                if r["realized_pnl_eur"] is None:
+                    return None
+                total += float(r["realized_pnl_eur"]) * eur_to_display
         override_amount = self._setting_float(conn, "realized_gains_ytd_override_amount")
         override_currency = self._setting_str(conn, "realized_gains_ytd_override_currency")
         if override_amount is None:
@@ -2272,7 +2288,7 @@ class AdvisoryService:
                     "tension": why.get("tension"),
                 })
 
-            # The 24m verdict feeds the no_recovery_24m label on the 6m/12m rows, so collect
+            # The 12m verdict feeds the no_recovery_12m label on the 3m/6m rows, so collect
             # every horizon's decision before writing any of them.
             book_horizons = horizons_for(book)
             decisions: dict[str, dict[str, Any]] = {}

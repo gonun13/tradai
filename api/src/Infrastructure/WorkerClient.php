@@ -5,8 +5,9 @@ declare(strict_types=1);
 namespace Tradai\Api\Infrastructure;
 
 use RuntimeException;
+use Tradai\Api\Domain\TradeFxSource;
 
-final class WorkerClient
+final class WorkerClient implements TradeFxSource
 {
     public function __construct(private readonly string $baseUrl)
     {
@@ -51,6 +52,23 @@ final class WorkerClient
     public function searchSymbols(string $query): array
     {
         return $this->getJson('/search?q=' . rawurlencode($query), 15);
+    }
+
+    /** Trade-date FX via the worker's Frankfurter adapter (0031); null when unavailable. */
+    public function rateToEurOn(string $base, string $date): ?array
+    {
+        try {
+            $res = $this->getJson(
+                '/fx/historical?base=' . rawurlencode($base) . '&date=' . rawurlencode($date),
+                15
+            );
+        } catch (\Throwable) {
+            return null;
+        }
+        if (($res['ok'] ?? false) !== true || !is_numeric($res['rate'] ?? null) || (float) $res['rate'] <= 0.0) {
+            return null;
+        }
+        return ['rate' => (float) $res['rate'], 'as_of' => (string) ($res['as_of'] ?? $date)];
     }
 
     /** @return array<string, mixed> */

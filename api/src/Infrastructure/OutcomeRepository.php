@@ -14,7 +14,8 @@ use PDO;
  * deliberately not a backtest (`PROJECT.md` defers that): it reads `price_at_rec` and the
  * stored daily bars, nothing more.
  *
- * Note the horizons are 6m/12m/24m for holdings and 1m/3m/6m for the tracker (`0020`), and
+ * Note the horizons are 3m/6m/12m for holdings (`0030`; 6m/12m/24m before it) and 1m/3m/6m
+ * for the tracker (`0020`), and
  * `price_bars` holds roughly seven months of history, so early on most rows — especially the
  * holdings' longer ones — will be `pending`; that is expected, not a failure.
  */

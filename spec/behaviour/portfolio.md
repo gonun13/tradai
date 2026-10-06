@@ -24,7 +24,13 @@ Local holdings management for European and US listed equities and ETFs. Slim API
 - **Create / update / delete** holdings via Slim HTTP API; create/update capture acquisition **trade_date** and **commission** (cost basis includes commission — `0007`).
 - Adding another acquisition for an **existing ticker** appends a transaction and recomputes the holding rollup (still one dashboard line).
 - Updating requires choosing a **transaction_id** when multiple lots exist; only that lot is rewritten, then the rollup is recomputed.
-- Deleting a holding removes all of its transactions; keep Instrument + bars unless product rules say otherwise (default: keep Instrument + bars).
+- **Sell** (`0031`): record a sell (trade date, quantity ≤ open quantity, unit price, commission, notes) via
+  `POST /holdings/{id}/sells`. FIFO consumes the oldest lots; the realised P&L is stored per sell. A partial
+  sell keeps the holding line; a full exit removes it and the position moves to **Closed positions**.
+- **Edit / delete any transaction** (buy or sell) via `PUT` / `DELETE /transactions/{id}`; the ledger is
+  re-walked and a change that would oversell is rejected. Deleting the closing sell reopens the position.
+- **Erase** (`DELETE /holdings/{id}`, `DELETE /positions/closed/{instrument_id}`) removes the instrument's whole
+  history and is for entries made in error. Keep Instrument + bars.
 
 ### Read models
 
@@ -32,13 +38,17 @@ Local holdings management for European and US listed equities and ETFs. Slim API
 - Each holding exposes daily percentage change as the latest quote versus the most recent stored
   daily close before that quote's calendar date; it is unavailable when either value is missing.
 - Missing quotes are tolerable (show holding with stale / empty quote state).
+- Reporting (`0031`): unrealised P&L (today's FX), realised YTD and all-time (EUR locked at trade dates,
+  converted to display at today's rate) and total = unrealised + realised all-time, for the book and per
+  holding. **Closed positions** list opened/closed dates, held days, quantity, cost, proceeds, realised P&L
+  and the transaction history.
 
 ## Rules
 
 - One portfolio in v1.
 - **The portfolio is one of two books.** Names the operator is considering but does not own live on the Tracker
   (`0019`, `behaviour/tracker.md`). A symbol is in exactly one book at a time: recording an acquisition for a
-  tracked name archives its tracker entry, and deleting the holding hands it back.
+  tracked name archives its tracker entry, and a full exit (sell or erase) hands it back.
 - EU and US listed equities and ETFs for MVP intent (crypto and non-listed funds out of scope).
 - ETFs are not a second product surface — same CRUD and monitoring as equities.
 - No brokerage sync in MVP.
@@ -46,6 +56,7 @@ Local holdings management for European and US listed equities and ETFs. Slim API
 ## Acceptance cues
 
 - After CRUD, restart Compose: holdings still present on the volume.
+- After a full sell, the transactions and realised P&L remain under Closed positions.
 - Agents (when run) receive holding quantities / costs as part of advisory context.
 
 ## Out of scope here

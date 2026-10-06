@@ -12,7 +12,7 @@ COPY --from=vendor /app/vendor ./vendor
 COPY composer.json ./
 COPY public ./public
 COPY src ./src
-COPY test_holding_daily_change.php test_currency.php test_history.php test_operation_history.php ./
+COPY test_holding_daily_change.php test_currency.php test_history.php test_operation_history.php test_fifo_ledger.php test_sell_flow.php ./
 ENV TRADAI_DATA_DIR=/data
 EXPOSE 8080
 CMD ["php", "-S", "0.0.0.0:8080", "-t", "public", "public/index.php"]

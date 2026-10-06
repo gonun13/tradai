@@ -16,8 +16,12 @@ export type Transaction = {
   quantity: number
   unit_price: number
   commission: number
+  /** Buy: all-in cost. Sell: net proceeds (0031). */
   lot_cost: number
   notes: string | null
+  /** Instrument currency -> EUR on the trade date; null while pending (0031). */
+  fx_to_eur?: number | null
+  fx_as_of?: string | null
 }
 
 export type Quote = {
@@ -138,6 +142,13 @@ export type Holding = {
   pnl_native: number | null
   pnl_display: number | null
   pnl_pct: number | null
+  /** Realised from partial sells (0031). Display is locked EUR converted at today's rate. */
+  realized_pnl_native?: number | null
+  realized_pnl_display?: number | null
+  total_pnl_display?: number | null
+  first_trade_date?: string | null
+  held_days?: number | null
+  open_lot_count?: number | null
   daily_change_pct: number | null
   fx_to_display: number | null
   display_currency: DisplayCurrency
@@ -165,6 +176,61 @@ export type HoldingInput = {
   commission: number
   notes?: string
   transaction_id?: number
+}
+
+export type SellInput = {
+  trade_date: string
+  quantity: number
+  unit_price: number
+  commission: number
+  notes?: string
+}
+
+export type TransactionInput = Partial<SellInput>
+
+/** Book P&L on `GET /holdings` (0031); null when any constituent is pending FX. */
+export type PortfolioSummary = {
+  unrealized_pnl_display: number | null
+  realized_ytd_display: number | null
+  realized_all_time_display: number | null
+  total_pnl_display: number | null
+}
+
+export type Disposal = {
+  trade_date: string
+  quantity: number
+  currency: string
+  proceeds_native: number
+  cost_native: number
+  realized_pnl_native: number
+  realized_pnl_eur: number | null
+  realized_pnl_display: number | null
+  display_currency: DisplayCurrency
+}
+
+/** Response of every ledger mutation; `holding` is null once the position is closed. */
+export type LedgerMutation = {
+  ok: boolean
+  holding: Holding | null
+  closed: boolean
+  disposal?: Disposal | null
+}
+
+export type ClosedPosition = {
+  instrument: Instrument
+  opened_at: string | null
+  closed_at: string | null
+  held_days: number | null
+  quantity_bought: number
+  quantity_sold: number
+  cost_native: number
+  proceeds_native: number
+  realized_pnl_native: number
+  realized_pnl_eur: number | null
+  realized_pnl_display: number | null
+  realized_pct: number | null
+  display_currency: DisplayCurrency
+  transactions: Transaction[]
 }
 
 export type OperationRunSummary = {
@@ -374,6 +440,8 @@ export type RecommendationAction = 'buy' | 'sell' | 'hold' | 'watch' | 'drop'
 export type RecommendationReason =
   | 'thesis_broken'
   | 'better_use'
+  // 0030 — bank a gain on a holding.
+  | 'take_profit'
   | 'thesis_intact_underweight'
   | 'new_conviction'
   | 'thesis_intact'
@@ -442,6 +510,7 @@ export type PortfolioSettings = {
   display_currency_options: DisplayCurrency[]
   cash: MoneySetting
   realized_gains_ytd_from_disposals_display: number | null
+  realized_gains_all_time_from_disposals_display?: number | null
   realized_gains_ytd_override: MoneySetting
   realized_gains_ytd_display: number | null
   calendar_year: number
@@ -480,7 +549,7 @@ export type Recommendation = {
   horizon: '1m' | '3m' | '6m' | '12m' | '24m'
   // 0013 — why, and what the doctrine gate did about it.
   reason: RecommendationReason | null
-  loss_gate: 'not_at_loss' | 'offset_same_year' | 'no_recovery_24m' | 'blocked' | null
+  loss_gate: 'not_at_loss' | 'offset_same_year' | 'no_recovery_24m' | 'no_recovery_12m' | 'blocked' | null
   pair_symbol: string | null
   confidence: number | null
   suppressed: boolean

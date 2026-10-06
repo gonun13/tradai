@@ -56,10 +56,19 @@ cp .env.example .env   # if needed
 
 ### Portfolio (`behaviour/portfolio.md`)
 
-1. UI: add / edit / delete a holding (acquisition: trade date, qty, unit price, commission)
+1. UI: add / edit / erase a holding (acquisition: trade date, qty, unit price, commission)
 2. `docker compose exec worker curl -fsS http://api:8080/holdings` — book JSON
 3. Restart Compose — holding still present
 4. Money labels use the selected display currency (EUR by default)
+5. Sells (`0031`): buy 10 of a USD name dated last year, **Sell** 4 → quantity 6, the P&L cell shows a
+   realised line and the summary shows Realised all-time / Total P&L; selling more than is open is
+   rejected with a message
+6. Sell the remaining 6 → the row leaves Holdings and appears under **Closed positions** with dates,
+   proceeds, realised P&L and its transactions; the name is back on the Tracker if it came from there;
+   `/setup` calculated realised total includes this year's sells
+7. Delete the closing sell from Closed positions → the position reopens with quantity 6
+8. Switch display currency to USD → realised figures convert; `GET /context/preview?book=portfolio`
+   lists no closed names
 
 ### Quotes, bars, FX (`0006`)
 
@@ -99,7 +108,8 @@ cp .env.example .env   # if needed
 ### Agent advisory (`behaviour/agent-advisory.md`, `0009`)
 
 1. Set Claude OAuth + TypeSafe keys; rebuild worker if needed
-2. UI → **Run now** — recommendations: portfolio buy/sell/hold/watch × **6m / 12m / 24m**; tracker × **1m / 3m / 6m**
+2. UI → **Run now** — recommendations: portfolio buy/sell/hold/watch × **3m / 6m / 12m**; tracker × **1m / 3m / 6m**.
+   A holding at a gain can come back `sell` with reason `take_profit` (loss label `not_at_loss`) (`0030`)
 3. Or run inside Compose: `docker compose exec worker curl -fsS -X POST http://api:8080/agent/run`, then `docker compose exec worker curl -fsS http://api:8080/agent/runs/latest`
 4. Missing tokens → **failed** run with a visible error (not a silent no-op)
 5. Repeats within 24h reuse SQLite cache; **Force run** or `?force=1` bypasses it
@@ -176,7 +186,7 @@ scenario loop per `0009`), `ADVISORY_MATERIAL_MOVE_PCT=5`, `ADVISORY_MAX_CARRY_D
 2. **Ingest now** — quote / bars / fundamentals / technicals / news for the tracked name
 3. **Force run** — Tracker recommendations, five lenses, horizons **1m / 3m / 6m**
 4. `/tracker/log/<symbol>` — "Tracked, not owned"; investor profile as mandate context
-5. Record an acquisition → entry archives to Portfolio; delete the holding → tracker returns
+5. Record an acquisition → entry archives to Portfolio; sell it in full (or erase the holding) → tracker returns
 6. Adding a symbol that is already a holding → HTTP 409
 7. Tracker displays Daily % from quote versus prior-session close with green, red, or neutral
    background, and exposes Run/Remove as labelled icon controls
@@ -190,6 +200,8 @@ docker compose exec api php test_holding_daily_change.php
 docker compose exec api php test_currency.php
 docker compose exec api php test_history.php
 docker compose exec api php test_operation_history.php
+docker compose exec api php test_fifo_ledger.php
+docker compose exec api php test_sell_flow.php
 docker compose exec worker python test_doctrine.py
 docker compose exec worker python test_currency.py
 docker compose exec worker python test_fundamentals_adapters.py
@@ -207,8 +219,10 @@ docker compose exec worker python test_explain.py
 | `test_currency.php` | EUR default, validation, partial updates, legacy migration, source currencies, cross-rates, quote-currency conversion and missing FX |
 | `test_history.php` | Ranges, common-date normalization, pre-benchmark Max points, native currencies, missing data and validation |
 | `test_operation_history.php` | Manual ingest success/failure detail and newest-20 pruning |
+| `test_fifo_ledger.php` | FIFO partial/full sells, commissions both sides, held-since after re-entry, trade-date EUR locking, pending FX, oversold flag (`0031`) |
+| `test_sell_flow.php` | Sell records and closes positions, history kept, closed positions read model, reopen by deleting the closing sell, oversell/funding-buy rejection, pending FX swept later, EUR → display, erase clears disposals (`0031`) |
 | `test_doctrine.py` | Choice parsing, loss-gate labels, mandate composition, tracker vs portfolio choice maps |
-| `worker/test_currency.py` | Worker FX collection and display-currency advisory context, including incomplete aggregate behavior |
+| `worker/test_currency.py` | Worker FX collection and display-currency advisory context, including incomplete aggregate behavior and realised YTD from locked EUR disposals (`0031`) |
 | `test_fundamentals_adapters.py` | Finnhub/Alpha Vantage normalization, failures, symbol translation, routing and persisted daily quota |
 | `test_ingestion.py` | Completeness/scoring, ordered fallbacks, cache protection, persistent rate state, cadence isolation, unchanged-bar behavior |
 | `test_persist_e2e.py` | Persisted action is exactly what Jev decided (never rewritten); tracker verbs, `book` column, five-lens rule; carried rows copy the decision and explanation, name the deciding run, and never alert; a missing explanation never blocks persistence |

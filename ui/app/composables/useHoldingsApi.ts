@@ -18,6 +18,11 @@ import type {
   DisplayCurrency,
   MoneySettingInput,
   Recommendation,
+  ClosedPosition,
+  LedgerMutation,
+  PortfolioSummary,
+  SellInput,
+  TransactionInput,
 } from '~/types/api'
 
 export function useHoldingsApi() {
@@ -27,16 +32,35 @@ export function useHoldingsApi() {
       holdings: Holding[]
       display_currency: DisplayCurrency
       portfolio_market_value_display: number | null
+      summary?: PortfolioSummary
     }>('/api/holdings')
 
   const create = (body: HoldingInput) =>
     $fetch<{ ok: boolean; holding: Holding }>('/api/holdings', { method: 'POST', body })
 
   const update = (id: number, body: Partial<HoldingInput>) =>
-    $fetch<{ ok: boolean; holding: Holding }>(`/api/holdings/${id}`, { method: 'PUT', body })
+    $fetch<LedgerMutation>(`/api/holdings/${id}`, { method: 'PUT', body })
 
+  /** Erase a holding and its whole history (entered in error). Exiting is `sell` (0031). */
   const remove = (id: number) =>
     $fetch<{ ok: boolean }>(`/api/holdings/${id}`, { method: 'DELETE' })
+
+  const sell = (holdingId: number, body: SellInput) =>
+    $fetch<LedgerMutation>(`/api/holdings/${holdingId}/sells`, { method: 'POST', body })
+
+  const updateTransaction = (id: number, body: TransactionInput) =>
+    $fetch<LedgerMutation>(`/api/transactions/${id}`, { method: 'PUT', body })
+
+  const removeTransaction = (id: number) =>
+    $fetch<LedgerMutation>(`/api/transactions/${id}`, { method: 'DELETE' })
+
+  const closedPositions = () =>
+    $fetch<{ ok: boolean; closed: ClosedPosition[]; display_currency: DisplayCurrency }>(
+      '/api/positions/closed',
+    )
+
+  const eraseClosed = (instrumentId: number) =>
+    $fetch<{ ok: boolean }>(`/api/positions/closed/${instrumentId}`, { method: 'DELETE' })
 
   const refreshMarket = () =>
     $fetch<{ ok: boolean; run_id: number; refresh: Record<string, unknown> }>('/api/refresh/market', {
@@ -219,6 +243,11 @@ export function useHoldingsApi() {
     create,
     update,
     remove,
+    sell,
+    updateTransaction,
+    removeTransaction,
+    closedPositions,
+    eraseClosed,
     getSettings,
     saveSettings,
     listTracker,

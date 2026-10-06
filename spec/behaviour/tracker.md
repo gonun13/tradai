@@ -48,9 +48,9 @@ keep this?", and give a `better_use` sell (`0013`) a real named alternative to p
   On the `fundamentals` lens the question mirrors the portfolio's: whether the case for *buying*
   holds, not whether the reason for *owning* still does. On `historical`, whether today's price
   is a reasonable entry against the name's own record.
-- **Its own horizons: `1m` / `3m` / `6m`, not the holdings' `6m` / `12m` / `24m` (`0020`).**
-  An entry-timing question stays short; `24m` exists to back the `no_recovery_24m` loss gate,
-  which the tracker never has. The table's gain columns (`1m`, `3m`, `6m`) line up with the
+- **Its own horizons: `1m` / `3m` / `6m`, not the holdings' `3m` / `6m` / `12m` (`0020`, `0030`).**
+  An entry-timing question stays short; the holdings' `12m` backs the `no_recovery_12m` loss
+  label, which the tracker never has. The table's gain columns (`1m`, `3m`, `6m`) line up with the
   same set.
 - **Its own verbs.** `buy_now` / `wait_better_entry` / `keep_watching` / `drop_lost_interest`.
   Sell and hold are unrepresentable here. `drop` is a suggestion, never a deletion.

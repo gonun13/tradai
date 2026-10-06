@@ -364,11 +364,14 @@ final class Database
         self::ensureColumn($pdo, 'recommendations', 'carried_from_run_id', 'INTEGER');
         // 0028: Claude's plain-language explanation, JSON {text, tension, market_read}.
         self::ensureColumn($pdo, 'recommendations', 'explanation', 'TEXT');
+        // 0030: after the 0027/0028 columns, so the rebuild copies them too.
+        self::ensureTakeProfitSchema($pdo);
         self::ensureTrackerInstruments($pdo);
         self::ensureProfileSplit($pdo);
         self::ensureColumn($pdo, 'holdings', 'first_trade_date', 'TEXT');
         self::ensureColumn($pdo, 'holdings', 'open_lot_count', 'INTEGER');
         self::ensureColumn($pdo, 'holdings', 'realized_pnl_native', 'REAL');
+        self::ensureTradeFxColumns($pdo);
         self::ensureAlertsTable($pdo);
         self::backfillAlertsFromRecommendations($pdo);
         self::backfillTransactionsFromLegacyHoldings($pdo);
@@ -384,6 +387,24 @@ final class Database
             $pdo->exec('ALTER TABLE holdings ADD COLUMN total_cost REAL NOT NULL DEFAULT 0');
             $pdo->exec('UPDATE holdings SET total_cost = quantity * avg_cost WHERE total_cost = 0');
         }
+    }
+
+    /**
+     * 0031: realised P&L is locked in EUR at trade dates. EUR listings need no lookup; every
+     * other transaction keeps a null rate until HoldingRepository fetches it via the worker.
+     */
+    private static function ensureTradeFxColumns(PDO $pdo): void
+    {
+        self::ensureColumn($pdo, 'transactions', 'fx_to_eur', 'REAL');
+        self::ensureColumn($pdo, 'transactions', 'fx_as_of', 'TEXT');
+        self::ensureColumn($pdo, 'realized_disposals', 'proceeds_eur', 'REAL');
+        self::ensureColumn($pdo, 'realized_disposals', 'cost_eur', 'REAL');
+        self::ensureColumn($pdo, 'realized_disposals', 'realized_pnl_eur', 'REAL');
+        $pdo->exec(
+            "UPDATE transactions SET fx_to_eur = 1.0, fx_as_of = trade_date
+             WHERE fx_to_eur IS NULL
+               AND instrument_id IN (SELECT id FROM instruments WHERE UPPER(currency) = 'EUR')"
+        );
     }
 
     private static function ensureAgentStage5bColumns(PDO $pdo): void
@@ -654,6 +675,95 @@ final class Database
 
             $pdo->exec('DROP TABLE recommendations');
             $pdo->exec('ALTER TABLE recommendations_horizons RENAME TO recommendations');
+            $pdo->commit();
+        } catch (\Throwable $e) {
+            $pdo->rollBack();
+            $pdo->exec('PRAGMA foreign_keys = ON');
+            throw $e;
+        }
+        $pdo->exec('PRAGMA foreign_keys = ON');
+    }
+
+    /**
+     * 0030: holdings gain a third sell reason, `take_profit`, and are judged over
+     * `3m / 6m / 12m`, so the no-recovery loss label is judged at 12m (`no_recovery_12m`).
+     * SQLite cannot ALTER a CHECK, so this rebuilds the table like ensureTrackerHorizonSchema()
+     * — but copying every current column, including the 0027/0028 ones added after it.
+     * `no_recovery_24m` stays legal so every pre-0030 row survives.
+     */
+    private static function ensureTakeProfitSchema(PDO $pdo): void
+    {
+        $sql = $pdo->query(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'recommendations'"
+        )->fetchColumn();
+        if (!is_string($sql) || $sql === '') {
+            return;
+        }
+        if (str_contains($sql, "'take_profit'") && str_contains($sql, "'no_recovery_12m'")) {
+            return; // already migrated
+        }
+
+        $pdo->exec('PRAGMA foreign_keys = OFF');
+        $pdo->beginTransaction();
+        try {
+            $pdo->exec(<<<'SQL'
+                CREATE TABLE recommendations_take_profit (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    agent_run_id INTEGER NOT NULL,
+                    instrument_id INTEGER NOT NULL,
+                    book TEXT NOT NULL DEFAULT 'portfolio'
+                        CHECK (book IN ('portfolio', 'tracker')),
+                    action TEXT NOT NULL CHECK (action IN ('buy', 'sell', 'hold', 'watch', 'drop')),
+                    horizon TEXT NOT NULL CHECK (horizon IN ('1m', '3m', '6m', '12m', '24m')),
+                    reason TEXT NOT NULL DEFAULT 'legacy' CHECK (reason IN (
+                        'thesis_broken', 'better_use', 'take_profit',
+                        'thesis_intact_underweight', 'new_conviction',
+                        'thesis_intact', 'insufficient_evidence', 'legacy',
+                        'entry_now', 'await_better_entry', 'lost_interest'
+                    )),
+                    loss_gate TEXT CHECK (loss_gate IS NULL OR loss_gate IN (
+                        'not_at_loss', 'offset_same_year', 'no_recovery_24m', 'no_recovery_12m',
+                        'blocked'
+                    )),
+                    pair_symbol TEXT,
+                    confidence REAL,
+                    suppressed INTEGER NOT NULL DEFAULT 0 CHECK (suppressed IN (0, 1)),
+                    suppressed_reason TEXT,
+                    proposed_action TEXT CHECK (proposed_action IS NULL OR proposed_action IN (
+                        'buy', 'sell', 'hold', 'watch', 'drop'
+                    )),
+                    price_at_rec REAL,
+                    rationale TEXT,
+                    jev_payload_json TEXT,
+                    jev_lenses_json TEXT,
+                    conversation_json TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    carried_from_run_id INTEGER,
+                    explanation TEXT,
+                    FOREIGN KEY (agent_run_id) REFERENCES agent_runs(id) ON DELETE CASCADE,
+                    FOREIGN KEY (instrument_id) REFERENCES instruments(id) ON DELETE CASCADE,
+                    UNIQUE (agent_run_id, instrument_id, horizon)
+                );
+            SQL);
+
+            $pdo->exec(<<<'SQL'
+                INSERT INTO recommendations_take_profit
+                    (id, agent_run_id, instrument_id, book, action, horizon, reason, loss_gate,
+                     pair_symbol, confidence, suppressed, suppressed_reason, proposed_action,
+                     price_at_rec, rationale, jev_payload_json, jev_lenses_json,
+                     conversation_json, created_at, updated_at, carried_from_run_id,
+                     explanation)
+                SELECT id, agent_run_id, instrument_id, book, action, horizon, reason, loss_gate,
+                       pair_symbol, confidence, suppressed, suppressed_reason, proposed_action,
+                       price_at_rec, rationale, jev_payload_json, jev_lenses_json,
+                       conversation_json, created_at, updated_at, carried_from_run_id,
+                       explanation
+                FROM recommendations;
+            SQL);
+
+            $pdo->exec('DROP TABLE recommendations');
+            $pdo->exec('ALTER TABLE recommendations_take_profit RENAME TO recommendations');
             $pdo->commit();
         } catch (\Throwable $e) {
             $pdo->rollBack();

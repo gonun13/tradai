@@ -109,7 +109,7 @@ def run_case(name, *, choices, realized_gains=0.0, expect_action, expect_reason=
     svc._persist_recommendations(conn, run_id, context, {}, lens_answers, combined, {}, log=[])
 
     # 0020: books are judged over different horizons now — read back the middle one of
-    # whichever set this book uses ('12m' for portfolio, '3m' for tracker).
+    # whichever set this book uses ('6m' for portfolio, '3m' for tracker).
     mid_horizon = horizons_for(book)[1]
     row = conn.execute(
         "SELECT action, reason, loss_gate, suppressed, book, jev_lenses_json, explanation FROM recommendations"
@@ -142,7 +142,7 @@ def run_case(name, *, choices, realized_gains=0.0, expect_action, expect_reason=
         print(f"  FAIL {name}: unexpected explanation {row['explanation']!r}"); ok = False
     # 0020: check persisted rows against the decision, not HORIZONS_BY_BOOK used
     # to construct the inputs above, so a wrong production map cannot pass itself.
-    expected_horizons = {"portfolio": {"6m", "12m", "24m"}, "tracker": {"1m", "3m", "6m"}}[book]
+    expected_horizons = {"portfolio": {"3m", "6m", "12m"}, "tracker": {"1m", "3m", "6m"}}[book]
     if persisted_horizons != expected_horizons:
         print(f"  FAIL {name}: horizons {persisted_horizons!r} != {expected_horizons!r}"); ok = False
     if expect_lenses is not None:
@@ -170,17 +170,23 @@ results = [
              choices={h: "sell_better_use" for h in HORIZONS_BY_BOOK["portfolio"]},
              expect_action="sell", expect_reason="better_use"),
 
+    # 0030: banking a gain is its own sell reason. U is held at a gain, so no loss label.
+    run_case("sell_take_profit on a gain -> sell / take_profit / not_at_loss",
+             symbol="U",
+             choices={h: "sell_take_profit" for h in HORIZONS_BY_BOOK["portfolio"]},
+             expect_action="sell", expect_reason="take_profit", expect_gate="not_at_loss"),
+
     # loss_gate is still computed and shown — informationally
-    run_case("loss + no gains + 24m sell -> labelled no_recovery_24m",
+    run_case("loss + no gains + 12m sell -> labelled no_recovery_12m",
              choices={h: "sell_thesis_broken" for h in HORIZONS_BY_BOOK["portfolio"]}, realized_gains=0.0,
-             expect_action="sell", expect_gate="no_recovery_24m"),
+             expect_action="sell", expect_gate="no_recovery_12m"),
 
     run_case("loss + same-year gain -> labelled offset_same_year",
              choices={h: "sell_thesis_broken" for h in HORIZONS_BY_BOOK["portfolio"]}, realized_gains=9000.0,
              expect_action="sell", expect_gate="offset_same_year"),
 
-    run_case("loss + no gain + 24m disagrees -> no label, but STILL sells",
-             choices={"6m": "sell_thesis_broken", "12m": "sell_thesis_broken", "24m": "hold"},
+    run_case("loss + no gain + 12m disagrees -> no label, but STILL sells",
+             choices={"3m": "sell_thesis_broken", "6m": "sell_thesis_broken", "12m": "hold"},
              realized_gains=0.0,
              expect_action="sell", expect_gate=None),
 

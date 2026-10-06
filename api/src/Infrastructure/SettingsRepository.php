@@ -53,7 +53,7 @@ final class SettingsRepository
     public function portfolio(): array
     {
         $display = CurrencyRates::display($this->db);
-        $fromDisposals = $this->realizedYtdFromDisposals($display);
+        $fromDisposals = RealizedGains::display($this->db, $display, gmdate('Y'));
         $cash = $this->money(self::CASH_AMOUNT, self::CASH_CURRENCY, $display);
         $override = $this->money(
             self::REALIZED_OVERRIDE_AMOUNT,
@@ -71,6 +71,8 @@ final class SettingsRepository
             'portfolio_profile_text' => $this->get(self::PORTFOLIO_PROFILE_TEXT),
             'cash' => $cash,
             'realized_gains_ytd_from_disposals_display' => $fromDisposals,
+            // 0031: this book's whole history; the override is YTD-only and not added here.
+            'realized_gains_all_time_from_disposals_display' => RealizedGains::display($this->db, $display),
             'realized_gains_ytd_override' => $override,
             'realized_gains_ytd_display' => $realized,
             'calendar_year' => (int) gmdate('Y'),
@@ -105,33 +107,6 @@ final class SettingsRepository
         );
 
         return $this->portfolio();
-    }
-
-    /** Sum of this calendar year's FIFO disposals in the selected display currency. */
-    private function realizedYtdFromDisposals(string $display): ?float
-    {
-        $year = gmdate('Y');
-        $rows = $this->db->prepare(
-            "SELECT d.realized_pnl, d.currency
-             FROM realized_disposals d
-             WHERE substr(d.trade_date, 1, 4) = :year"
-        );
-        $rows->execute(['year' => $year]);
-        $all = $rows->fetchAll();
-        if ($all === []) {
-            return 0.0;
-        }
-
-        $total = 0.0;
-        foreach ($all as $row) {
-            $currency = strtoupper((string) $row['currency']);
-            $rate = CurrencyRates::rate($this->db, $currency, $display);
-            if ($rate === null) {
-                return null;
-            }
-            $total += ((float) $row['realized_pnl']) * $rate;
-        }
-        return round($total, 2);
     }
 
     private function getFloat(string $key): ?float

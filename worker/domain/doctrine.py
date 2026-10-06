@@ -1,5 +1,6 @@
 """
-Sell-doctrine labels (spec/decisions/0013, revised — see 0018-simplify-trust-agents.md).
+Sell-doctrine labels (spec/decisions/0013, revised — see 0018-simplify-trust-agents.md and
+0030-portfolio-take-profit-horizons-3-6-12.md).
 
 Claude and Jev decide the action. Nothing here overrides them. This module only:
 
@@ -10,7 +11,7 @@ Claude and Jev decide the action. Nothing here overrides them. This module only:
    same-year offset or a "no recovery" call) for the log to display. It never changes what
    gets persisted.
 
-The actual guidance — the mandate, and the two reasons the operator accepts for a sell — is
+The actual guidance — the mandate, and the three reasons the operator accepts for a sell — is
 given to Claude and Jev directly in their prompts. They apply it; this module just labels
 the result for the operator to see.
 """
@@ -25,6 +26,8 @@ CHOICE_TO_ACTION: dict[str, tuple[str, str]] = {
     "buy_new_conviction": ("buy", "new_conviction"),
     "sell_thesis_broken": ("sell", "thesis_broken"),
     "sell_better_use": ("sell", "better_use"),
+    # 0030: banking a gain is the portfolio's main job, so it is a sell reason of its own.
+    "sell_take_profit": ("sell", "take_profit"),
     "hold": ("hold", "thesis_intact"),
     "watch": ("watch", "insufficient_evidence"),
 }
@@ -40,7 +43,8 @@ TRACKER_CHOICE_TO_ACTION: dict[str, tuple[str, str]] = {
 
 BOOKS = ("portfolio", "tracker")
 
-RECOVERY_HORIZON = "24m"
+# 0030: the portfolio's longest horizon is now 12m, so the no-recovery call is judged there.
+RECOVERY_HORIZON = "12m"
 
 # 0019: the single mandate splits in two. Both are defaults, used only until the operator
 # writes their own on the Setup page.
@@ -56,10 +60,13 @@ DEFAULT_INVESTOR_PROFILE = (
 
 # The rules for names already owned: sizing, trimming, when to sell, tax.
 DEFAULT_PORTFOLIO_PROFILE = (
-    "A cash reserve is held back and may fund buys — a buy does not require a sell. "
-    "Selling at a loss is disfavoured unless it offsets a gain realised this calendar year, "
-    "or the position has no plausible recovery within 24 months. Drawdown depth and "
-    "concentration alone are not sell signals."
+    "Holdings are judged over 3, 6 and 12 months, and the job is to bank gains: take profits "
+    "when a position is well up and the remaining upside no longer justifies the risk — the "
+    "run is stretched, momentum is fading, or the catalyst is priced in. Let a winner run "
+    "while its momentum and news still improve. A cash reserve is held back and may fund "
+    "buys — a buy does not require a sell. Selling at a loss is disfavoured unless it offsets "
+    "a gain realised this calendar year, or the position has no plausible recovery within 12 "
+    "months. Drawdown depth and concentration alone are not sell signals."
 )
 
 # Pre-0019 name. The single mandate was portfolio-management guidance in practice, so this
@@ -113,5 +120,5 @@ def label_loss_gate(
     if (realized_gains_ytd_display or 0.0) > 0:
         return "offset_same_year"
     if horizon_choices.get(RECOVERY_HORIZON) == "sell":
-        return "no_recovery_24m"
+        return "no_recovery_12m"
     return None

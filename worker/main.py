@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from domain.schedule import schedule_check_seconds, should_fire_now
+from infrastructure.adapters.frankfurter import FrankfurterFxAdapter
 from infrastructure.adapters.symbol_search import SymbolSearchAdapter
 from infrastructure.schedule_marker import already_fired_today, mark_fired_today, schedule_status
 from services.advisory import AdvisoryService
@@ -28,7 +29,15 @@ _advisory_lock = threading.Lock()
 _service = MarketRefreshService(DB_PATH, news_interval_seconds=NEWS_INTERVAL)
 _advisory = AdvisoryService(DB_PATH)
 _symbol_search = SymbolSearchAdapter()
+_fx = FrankfurterFxAdapter()
 _advisory_thread: threading.Thread | None = None
+
+
+def _is_iso_date(value: str) -> bool:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").strftime("%Y-%m-%d") == value
+    except ValueError:
+        return False
 
 
 def run_refresh(*, force_news: bool = False, manual_gap_retry: bool = False) -> dict:
@@ -186,6 +195,21 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": True, "results": results, "warnings": warnings})
             except Exception as exc:  # noqa: BLE001
                 self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/fx/historical":
+            # 0031: trade-date FX that locks realised P&L in EUR. The API owns the ledger;
+            # the worker owns the vendor adapters.
+            qs = parse_qs(urlparse(self.path).query)
+            base = (qs.get("base") or [""])[0].strip().upper()
+            on_date = (qs.get("date") or [""])[0].strip()
+            if len(base) != 3 or not _is_iso_date(on_date):
+                self._json(400, {"ok": False, "error": "base (ISO 4217) and date (YYYY-MM-DD) are required"})
+                return
+            try:
+                rate, as_of = _fx.rate_to_eur(base, on_date)
+                self._json(200, {"ok": True, "base": base, "rate": rate, "as_of": as_of})
+            except Exception as exc:  # noqa: BLE001
+                self._json(502, {"ok": False, "error": str(exc)})
             return
         self._json(404, {"ok": False, "error": "not found"})
 

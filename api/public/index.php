@@ -29,7 +29,9 @@ $app = AppFactory::create();
 $dataDir = getenv('TRADAI_DATA_DIR') ?: '/data';
 $workerBase = getenv('WORKER_BASE_URL') ?: 'http://worker:8090';
 $pdo = Database::connection($dataDir);
-$holdings = new HoldingRepository($pdo);
+$worker = new WorkerClient($workerBase);
+// The worker supplies trade-date FX that locks realised P&L in EUR (0031).
+$holdings = new HoldingRepository($pdo, $worker);
 $history = new HistoryRepository($pdo);
 $ingestRuns = new IngestRunRepository($pdo);
 $agents = new AgentRepository($pdo);
@@ -39,7 +41,6 @@ $settings = new SettingsRepository($pdo);
 $theses = new ThesisRepository($pdo);
 $tracker = new TrackerRepository($pdo);
 $instruments = new InstrumentRepository($pdo);
-$worker = new WorkerClient($workerBase);
 
 $json = static function (Response $response, mixed $payload, int $status = 200): Response {
     $response->getBody()->write(json_encode($payload, JSON_THROW_ON_ERROR));
@@ -101,6 +102,11 @@ $app->get('/', function (Request $request, Response $response) use ($json): Resp
             'POST /holdings',
             'PUT /holdings/{id}',
             'DELETE /holdings/{id}',
+            'POST /holdings/{id}/sells',
+            'PUT /transactions/{id}',
+            'DELETE /transactions/{id}',
+            'GET /positions/closed',
+            'DELETE /positions/closed/{instrument_id}',
             'GET /context/preview?book=portfolio|tracker',
             'GET /ingest/report',
             'GET /ingest/runs',
@@ -247,6 +253,7 @@ $app->get('/holdings', function (Request $request, Response $response) use ($jso
         'holdings' => $rows,
         'display_currency' => $displayCurrency,
         'portfolio_market_value_display' => $complete ? round($totalDisplay, 2) : null,
+        'summary' => $holdings->summary($rows),
     ]);
 });
 
@@ -264,18 +271,74 @@ $app->post('/holdings', function (Request $request, Response $response) use ($js
     return $json($response, ['ok' => true, 'holding' => $created], 201);
 });
 
-$app->put('/holdings/{id}', function (Request $request, Response $response, array $args) use ($json, $holdings): Response {
+/**
+ * A ledger change that opens or closes a position moves the name between books (0019, 0031):
+ * a full exit hands it back to the Tracker; a reopen archives that entry again.
+ *
+ * @param array{holding: ?array<string, mixed>, symbol: string, was_open: bool, is_open: bool} $result
+ */
+$syncBooks = static function (array $result) use ($tracker): void {
+    if ($result['was_open'] && !$result['is_open']) {
+        $tracker->unarchiveBySymbol($result['symbol']);
+    } elseif (!$result['was_open'] && $result['is_open']) {
+        $tracker->archiveBySymbol($result['symbol']);
+    }
+};
+
+$app->put('/holdings/{id}', function (Request $request, Response $response, array $args) use ($json, $holdings, $syncBooks): Response {
     $id = (int) $args['id'];
     /** @var array<string, mixed> $body */
     $body = (array) $request->getParsedBody();
-    $updated = $holdings->update($id, $body);
-    return $json($response, ['ok' => true, 'holding' => $updated]);
+    $result = $holdings->update($id, $body);
+    $syncBooks($result);
+    return $json($response, ['ok' => true, 'holding' => $result['holding'], 'closed' => !$result['is_open']]);
+});
+
+$app->post('/holdings/{id}/sells', function (Request $request, Response $response, array $args) use ($json, $holdings, $syncBooks): Response {
+    /** @var array<string, mixed> $body */
+    $body = (array) $request->getParsedBody();
+    $result = $holdings->recordSell((int) $args['id'], $body);
+    $syncBooks($result);
+    return $json($response, [
+        'ok' => true,
+        'holding' => $result['holding'],
+        'closed' => !$result['is_open'],
+        'disposal' => $result['disposal'],
+    ], 201);
+});
+
+$app->put('/transactions/{id}', function (Request $request, Response $response, array $args) use ($json, $holdings, $syncBooks): Response {
+    /** @var array<string, mixed> $body */
+    $body = (array) $request->getParsedBody();
+    $result = $holdings->updateTransaction((int) $args['id'], $body);
+    $syncBooks($result);
+    return $json($response, ['ok' => true, 'holding' => $result['holding'], 'closed' => !$result['is_open']]);
+});
+
+$app->delete('/transactions/{id}', function (Request $request, Response $response, array $args) use ($json, $holdings, $syncBooks): Response {
+    $result = $holdings->deleteTransaction((int) $args['id']);
+    $syncBooks($result);
+    return $json($response, ['ok' => true, 'holding' => $result['holding'], 'closed' => !$result['is_open']]);
+});
+
+$app->get('/positions/closed', function (Request $request, Response $response) use ($json, $holdings, $settings): Response {
+    return $json($response, [
+        'ok' => true,
+        'closed' => $holdings->closedPositions(),
+        'display_currency' => $settings->portfolio()['display_currency'],
+    ]);
+});
+
+$app->delete('/positions/closed/{instrument_id}', function (Request $request, Response $response, array $args) use ($json, $holdings): Response {
+    $holdings->eraseClosed((int) $args['instrument_id']);
+    return $json($response, ['ok' => true]);
 });
 
 $app->delete('/holdings/{id}', function (Request $request, Response $response, array $args) use ($json, $holdings, $tracker): Response {
     $id = (int) $args['id'];
+    // Erase, not exit (0031): the whole history goes. Exiting is POST /holdings/{id}/sells.
     $symbol = $holdings->delete($id);
-    // A full exit drops the name back onto the tracker it was promoted from (0019).
+    // Either way the name drops back onto the tracker it was promoted from (0019).
     $tracker->unarchiveBySymbol($symbol);
     return $json($response, ['ok' => true]);
 });
@@ -314,11 +377,18 @@ $app->get('/ingest/runs/{id}', function (Request $request, Response $response, a
     return $json($response, ['ok' => true, 'run' => $run]);
 });
 
-$app->post('/refresh/market', function (Request $request, Response $response) use ($json, $worker, $ingestRuns): Response {
+$app->post('/refresh/market', function (Request $request, Response $response) use ($json, $worker, $ingestRuns, $holdings): Response {
     $force = in_array(strtolower((string) ($request->getQueryParams()['force_news'] ?? '')), ['1', 'true', 'yes'], true);
     $runId = $ingestRuns->start();
     try {
         $result = $worker->refreshMarket($force);
+        // 0031: retry trade-date rates that were unavailable at write time (and backfill
+        // lots recorded before rates were locked). Best effort; never fails the ingest.
+        try {
+            $result['trade_fx_filled'] = $holdings->fillMissingTradeFx();
+        } catch (\Throwable $fxError) {
+            $result['trade_fx_error'] = $fxError->getMessage();
+        }
         $ingestRuns->succeed($runId, $result);
         return $json($response, ['ok' => true, 'run_id' => $runId, 'refresh' => $result]);
     } catch (\Throwable $exception) {

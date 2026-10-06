@@ -20,7 +20,8 @@ from services.advisory import AdvisoryService, LENSES
 # book of this size measured ~350k Jev chars, and its ~25k-char Claude prompt also paid
 # ~27k tokens of CLI system prompt and tool definitions. Most of what is left in Jev is
 # the per-question criteria labels, which the System One question shape requires.
-JEV_RUN_CEILING = 140_000
+# 0030's `sell_take_profit` label rides on every portfolio question (~6k chars here).
+JEV_RUN_CEILING = 150_000
 CLAUDE_PROMPT_CEILING = 42_000
 
 
@@ -152,7 +153,7 @@ class BudgetTests(unittest.TestCase):
         combined_state = self.calls[-1][0]
         row = combined_state["holdings"][0]
         self.assertEqual({"historical", "fundamentals", "technicals", "news"}, set(row["lens_verdicts"]))
-        self.assertEqual("6m:hold, 12m:hold, 24m:hold", row["lens_verdicts"]["news"])
+        self.assertEqual("3m:hold, 6m:hold, 12m:hold", row["lens_verdicts"]["news"])
 
     def test_claude_prompt_under_ceiling(self):
         prompts: list[str] = []

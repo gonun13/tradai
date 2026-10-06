@@ -6,6 +6,9 @@ import type {
   Transaction,
   AgentRun,
   Recommendation,
+  ClosedPosition,
+  LedgerMutation,
+  SellInput,
 } from '~/types/api'
 
 const api = useHoldingsApi()
@@ -39,7 +42,18 @@ const emptyForm = (): HoldingInput => ({
 
 const form = reactive<HoldingInput>(emptyForm())
 
+// Sell form (0031). `sellEditTxId` set = editing an existing sell instead of recording one.
+const sellingHolding = ref<Holding | null>(null)
+const sellEditTxId = ref<number | null>(null)
+const emptySell = (): SellInput => ({ trade_date: today(), quantity: 0, unit_price: 0, commission: 0, notes: '' })
+const sellForm = reactive<SellInput>(emptySell())
+
 const { data, pending, refresh, error: loadError } = await useAsyncData('holdings', () => api.list())
+const {
+  data: closedData,
+  pending: closedPending,
+  refresh: refreshClosed,
+} = await useAsyncData('closed-positions', () => api.closedPositions())
 
 const {
   data: contextPreviewData,
@@ -48,9 +62,11 @@ const {
   error: contextLoadError,
 } = await useAsyncData('portfolio-context-preview', () => api.contextPreview('portfolio'))
 
-const refreshBook = () => Promise.all([refresh(), refreshContext()])
+const refreshBook = () => Promise.all([refresh(), refreshContext(), refreshClosed()])
 
 const holdings = computed(() => data.value?.holdings ?? [])
+const summary = computed(() => data.value?.summary ?? null)
+const closedPositions = computed<ClosedPosition[]>(() => closedData.value?.closed ?? [])
 const portfolioValue = computed(() => data.value?.portfolio_market_value_display ?? null)
 const displayCurrency = computed(() => data.value?.display_currency ?? 'EUR')
 // Ingest / Run / Force are inline buttons in the layout header — one combined run covers both
@@ -98,7 +114,123 @@ function resetForm() {
   Object.assign(form, emptyForm())
 }
 
+function pnlClass(n: number | null | undefined) {
+  return { ok: (n ?? 0) > 0, bad: (n ?? 0) < 0 }
+}
+
+function closeSell() {
+  sellingHolding.value = null
+  sellEditTxId.value = null
+  Object.assign(sellForm, emptySell())
+}
+
+function startSell(h: Holding) {
+  resetForm()
+  message.value = ''
+  error.value = ''
+  sellEditTxId.value = null
+  sellingHolding.value = h
+  // Prefill a full exit at the latest quote when it is in the listing's own currency.
+  const sameCurrency = h.quote && h.quote.currency.toUpperCase() === h.instrument.currency.toUpperCase()
+  Object.assign(sellForm, emptySell(), {
+    quantity: h.quantity,
+    unit_price: sameCurrency ? h.quote!.price : 0,
+  })
+}
+
+function openEditSell(h: Holding, tx: Transaction) {
+  lotPickerHolding.value = null
+  formOpen.value = false
+  message.value = ''
+  error.value = ''
+  sellingHolding.value = h
+  sellEditTxId.value = tx.id
+  Object.assign(sellForm, {
+    trade_date: tx.trade_date,
+    quantity: tx.quantity,
+    unit_price: tx.unit_price,
+    commission: tx.commission,
+    notes: tx.notes ?? '',
+  })
+}
+
+const sellProceedsPreview = computed(
+  () => Number(sellForm.quantity || 0) * Number(sellForm.unit_price || 0) - Number(sellForm.commission || 0),
+)
+
+function realisedText(res: LedgerMutation) {
+  const d = res.disposal
+  if (!d) return ''
+  const native = money(d.realized_pnl_native, d.currency)
+  if (d.realized_pnl_display == null) return ` Realised ${native} (${d.display_currency} pending FX).`
+  return d.currency.toUpperCase() === d.display_currency
+    ? ` Realised ${native}.`
+    : ` Realised ${native} · ${money(d.realized_pnl_display, d.display_currency)}.`
+}
+
+async function submitSell() {
+  const h = sellingHolding.value
+  if (!h) return
+  error.value = ''
+  message.value = ''
+  const payload: SellInput = { ...sellForm, notes: sellForm.notes || undefined }
+  try {
+    const res = sellEditTxId.value == null
+      ? await api.sell(h.id, payload)
+      : await api.updateTransaction(sellEditTxId.value, payload)
+    const verb = sellEditTxId.value == null ? 'Sell recorded.' : 'Sell updated.'
+    message.value = res.closed
+      ? `${verb}${realisedText(res)} ${h.instrument.symbol} is closed — its history is under Closed positions.`
+      : `${verb}${realisedText(res)}`
+    closeSell()
+    await refreshBook()
+  } catch (e: unknown) {
+    error.value = errorText(e, 'Sell failed')
+  }
+}
+
+async function removeTransaction(tx: Transaction, symbol: string) {
+  const what = `${tx.side} of ${tx.quantity} ${symbol} on ${tx.trade_date}`
+  if (!window.confirm(`Delete the ${what}? The ledger is recalculated.`)) {
+    return
+  }
+  error.value = ''
+  message.value = ''
+  try {
+    const res = await api.removeTransaction(tx.id)
+    message.value = res.closed ? `Deleted the ${what}.` : `Deleted the ${what}. ${symbol} is open.`
+    lotPickerHolding.value = null
+    await refreshBook()
+  } catch (e: unknown) {
+    error.value = errorText(e, 'Delete failed')
+  }
+}
+
+async function eraseClosed(c: ClosedPosition) {
+  const symbol = c.instrument.symbol
+  if (!window.confirm(`Erase ${symbol} and its entire history (${c.transactions.length} transactions, realised P&L)? This cannot be undone.`)) {
+    return
+  }
+  error.value = ''
+  message.value = ''
+  try {
+    await api.eraseClosed(c.instrument.id)
+    message.value = `${symbol} history erased.`
+    await refreshBook()
+  } catch (e: unknown) {
+    error.value = errorText(e, 'Erase failed')
+  }
+}
+
+// $fetch errors carry the API's `{ error }` body; prefer it over the generic HTTP message.
+function errorText(e: unknown, fallback: string) {
+  const body = (e as { data?: { error?: unknown } })?.data
+  if (body && typeof body.error === 'string' && body.error) return body.error
+  return e instanceof Error ? e.message : fallback
+}
+
 function startAdd() {
+  closeSell()
   editingId.value = null
   editingTxId.value = null
   lotPickerHolding.value = null
@@ -119,6 +251,7 @@ function onCurrencyChange() {
 }
 
 function startEdit(h: Holding) {
+  closeSell()
   message.value = ''
   error.value = ''
   const lots = h.transactions ?? []
@@ -128,6 +261,14 @@ function startEdit(h: Holding) {
     return
   }
   openEditLot(h, lots[0] ?? null)
+}
+
+function pickTransaction(h: Holding, tx: Transaction) {
+  if (tx.side === 'sell') {
+    openEditSell(h, tx)
+  } else {
+    openEditLot(h, tx)
+  }
 }
 
 function dailyChangeClass(change: number | null) {
@@ -183,13 +324,15 @@ async function submit() {
       if (editingTxId.value != null) {
         payload.transaction_id = editingTxId.value
       }
-      await api.update(editingId.value, payload)
-      message.value = 'Acquisition lot updated.'
+      const res = await api.update(editingId.value, payload)
+      message.value = res.closed
+        ? `Acquisition lot updated. ${form.symbol} is now closed — see Closed positions.`
+        : 'Acquisition lot updated.'
     }
     resetForm()
     await refreshBook()
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Save failed'
+    error.value = errorText(e, 'Save failed')
   }
 }
 
@@ -199,23 +342,28 @@ async function removeHolding(h: Holding) {
     lots > 1
       ? `${h.instrument.symbol} (${lots} lots, qty ${h.quantity})`
       : `${h.instrument.symbol} (qty ${h.quantity})`
-  if (!window.confirm(`Delete holding ${detail}? This cannot be undone.`)) {
+  if (!window.confirm(
+    `Erase ${detail} and its entire history? Use this only for entries made in error — to exit a position, record a sell. This cannot be undone.`,
+  )) {
     return
   }
   error.value = ''
   message.value = ''
   try {
     await api.remove(h.id)
-    message.value = 'Holding deleted.'
+    message.value = `${h.instrument.symbol} erased.`
     if (editingId.value === h.id) {
       resetForm()
     }
     if (lotPickerHolding.value?.id === h.id) {
       lotPickerHolding.value = null
     }
+    if (sellingHolding.value?.id === h.id) {
+      closeSell()
+    }
     await refreshBook()
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Delete failed'
+    error.value = errorText(e, 'Erase failed')
   }
 }
 
@@ -232,18 +380,41 @@ async function removeHolding(h: Holding) {
           long-horizon decisions.
         </p>
       </div>
-      <div class="module-metrics" aria-label="Portfolio summary">
+      <div class="module-metrics portfolio-metrics" aria-label="Portfolio summary">
         <div class="module-metric">
           <span class="module-metric-label">Market value</span>
           <strong>{{ moneyOrDash(portfolioValue, displayCurrency) }}</strong>
         </div>
         <div class="module-metric">
-          <span class="module-metric-label">Holdings</span>
-          <strong>{{ holdings.length }}</strong>
+          <span class="module-metric-label">Unrealised</span>
+          <strong :class="pnlClass(summary?.unrealized_pnl_display)">
+            {{ moneyOrDash(summary?.unrealized_pnl_display, displayCurrency) }}
+          </strong>
         </div>
         <div class="module-metric">
-          <span class="module-metric-label">Decision horizon</span>
-          <strong>6 · 12 · 24m</strong>
+          <span class="module-metric-label">Total P&amp;L</span>
+          <strong :class="pnlClass(summary?.total_pnl_display)">
+            {{ moneyOrDash(summary?.total_pnl_display, displayCurrency) }}
+          </strong>
+          <span class="metric-sub">unrealised + realised all-time</span>
+        </div>
+        <div class="module-metric">
+          <span class="module-metric-label">Realised YTD</span>
+          <strong :class="pnlClass(summary?.realized_ytd_display)">
+            {{ moneyOrDash(summary?.realized_ytd_display, displayCurrency) }}
+          </strong>
+        </div>
+        <div class="module-metric">
+          <span class="module-metric-label">Realised all-time</span>
+          <strong :class="pnlClass(summary?.realized_all_time_display)">
+            {{ moneyOrDash(summary?.realized_all_time_display, displayCurrency) }}
+          </strong>
+          <span class="metric-sub">FX locked at trade dates</span>
+        </div>
+        <div class="module-metric">
+          <span class="module-metric-label">Holdings</span>
+          <strong>{{ holdings.length }}</strong>
+          <span class="metric-sub">decision horizon 3 · 6 · 12m</span>
         </div>
       </div>
     </section>
@@ -252,20 +423,78 @@ async function removeHolding(h: Holding) {
     <p v-if="error || loadError" class="bad">{{ error || loadError }}</p>
 
     <section v-if="lotPickerHolding" class="panel">
-      <h1>Choose acquisition to edit — {{ lotPickerHolding.instrument.symbol }}</h1>
-      <p class="mute">Position shows as one line; pick the lot you want to change.</p>
+      <h1>Choose transaction to edit — {{ lotPickerHolding.instrument.symbol }}</h1>
+      <p class="mute">Position shows as one line; pick the buy or sell you want to change or delete.</p>
       <ul class="lots">
-        <li v-for="tx in lotPickerHolding.transactions" :key="tx.id">
-          <button type="button" class="ghost lot-btn" @click="openEditLot(lotPickerHolding!, tx)">
+        <li v-for="tx in lotPickerHolding.transactions" :key="tx.id" class="lot-row">
+          <button type="button" class="ghost lot-btn" @click="pickTransaction(lotPickerHolding!, tx)">
+            <span class="pill" :data-action="tx.side">{{ tx.side }}</span>
             {{ tx.trade_date }} · qty {{ tx.quantity }} @ {{ money(tx.unit_price, lotPickerHolding.instrument.currency) }}
             · fee {{ money(tx.commission, lotPickerHolding.instrument.currency) }}
-            · lot {{ money(tx.lot_cost, lotPickerHolding.instrument.currency) }}
+            · {{ tx.side === 'sell' ? 'proceeds' : 'lot' }} {{ money(tx.lot_cost, lotPickerHolding.instrument.currency) }}
+          </button>
+          <button
+            type="button"
+            class="danger"
+            :aria-label="`Delete ${tx.side} of ${tx.quantity} on ${tx.trade_date}`"
+            @click="removeTransaction(tx, lotPickerHolding!.instrument.symbol)"
+          >
+            Delete
           </button>
         </li>
       </ul>
       <div class="actions">
         <button type="button" class="ghost" @click="lotPickerHolding = null">Cancel</button>
       </div>
+    </section>
+
+    <section v-if="sellingHolding" class="panel" aria-labelledby="sell-title">
+      <h1 id="sell-title">
+        {{ sellEditTxId == null ? 'Record sell' : `Edit sell #${sellEditTxId}` }} — {{ sellingHolding.instrument.symbol }}
+      </h1>
+      <p class="mute">
+        Open {{ sellingHolding.quantity }} at avg {{ money(sellingHolding.avg_cost, sellingHolding.instrument.currency) }}.
+        FIFO sells the oldest lots first; selling the whole position closes it and keeps its history.
+      </p>
+      <form class="form" @submit.prevent="submitSell">
+        <label>
+          Trade date
+          <input v-model="sellForm.trade_date" type="date" required>
+        </label>
+        <label>
+          Quantity
+          <input
+            v-model.number="sellForm.quantity"
+            type="number"
+            min="0"
+            step="any"
+            :max="sellEditTxId == null ? sellingHolding.quantity : undefined"
+            required
+          >
+        </label>
+        <label>
+          Unit price ({{ sellingHolding.instrument.currency }})
+          <input v-model.number="sellForm.unit_price" type="number" min="0" step="any" required>
+        </label>
+        <label>
+          Commission
+          <input v-model.number="sellForm.commission" type="number" min="0" step="any">
+        </label>
+        <label class="wide">
+          Notes
+          <input v-model="sellForm.notes">
+        </label>
+        <p class="mute wide">
+          Proceeds preview: {{ money(sellProceedsPreview, sellingHolding.instrument.currency) }}
+          <template v-if="sellEditTxId == null && Number(sellForm.quantity) >= sellingHolding.quantity">
+            · full exit
+          </template>
+        </p>
+        <div class="actions wide">
+          <button type="submit">{{ sellEditTxId == null ? 'Record sell' : 'Save' }}</button>
+          <button type="button" class="ghost" @click="closeSell">Cancel</button>
+        </div>
+      </form>
     </section>
 
     <section v-if="formOpen" class="panel">
@@ -385,8 +614,8 @@ async function removeHolding(h: Holding) {
               </span>
             </td>
             <td>
-              <template v-if="(h.lot_count ?? h.transactions?.length ?? 0) > 1">
-                {{ h.lot_count ?? h.transactions.length }} lots
+              <template v-if="(h.open_lot_count ?? h.lot_count ?? 0) > 1">
+                {{ h.open_lot_count ?? h.lot_count }} lots
                 <span class="sub">last {{ h.trade_date || '—' }} · avg {{ money(h.avg_cost, h.instrument.currency) }}</span>
               </template>
               <template v-else>
@@ -424,6 +653,10 @@ async function removeHolding(h: Holding) {
               >
                 {{ money(h.pnl_native, h.instrument.currency) }}
               </span>
+              <span v-if="h.realized_pnl_native" class="sub">
+                realised
+                {{ h.realized_pnl_display == null ? `${money(h.realized_pnl_native, h.instrument.currency)} · pending FX` : moneyOrDash(h.realized_pnl_display, displayCurrency) }}
+              </span>
             </td>
             <td :class="{ ok: (h.pnl_pct ?? 0) > 0, bad: (h.pnl_pct ?? 0) < 0 }">
               {{ pctOrDash(h.pnl_pct) }}
@@ -448,6 +681,17 @@ async function removeHolding(h: Holding) {
               <button
                 type="button"
                 class="ghost portfolio-icon-btn"
+                :aria-label="`Sell ${h.instrument.symbol}`"
+                :title="`Sell ${h.instrument.symbol}`"
+                @click="startSell(h)"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M14 3h7v7h-2V6.4l-7.3 7.3-1.4-1.4L17.6 5H14V3ZM5 5h6v2H5v12h12v-6h2v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                class="ghost portfolio-icon-btn"
                 :aria-label="`Edit ${h.instrument.symbol}`"
                 :title="`Edit ${h.instrument.symbol}`"
                 @click="startEdit(h)"
@@ -459,8 +703,8 @@ async function removeHolding(h: Holding) {
               <button
                 type="button"
                 class="danger portfolio-icon-btn"
-                :aria-label="`Delete ${h.instrument.symbol}`"
-                :title="`Delete ${h.instrument.symbol}`"
+                :aria-label="`Erase ${h.instrument.symbol} and its history`"
+                :title="`Erase ${h.instrument.symbol} and its history`"
                 @click="removeHolding(h)"
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -478,6 +722,14 @@ async function removeHolding(h: Holding) {
         </tbody>
       </table>
     </section>
+
+    <ClosedPositions
+      :positions="closedPositions"
+      :display-currency="displayCurrency"
+      :pending="closedPending"
+      @remove-transaction="(tx, symbol) => removeTransaction(tx, symbol)"
+      @erase="eraseClosed"
+    />
 
     <RecommendationsPanel
       book="portfolio"
@@ -544,4 +796,26 @@ async function removeHolding(h: Holding) {
 }
 
 .history-row > td { padding: 0; }
+
+.portfolio-metrics .module-metric:nth-child(3n) { border-right: 0; }
+.portfolio-metrics .module-metric:nth-child(n + 4) { border-top: 1px solid var(--line); }
+.portfolio-metrics strong.ok { color: var(--ok); }
+.portfolio-metrics strong.bad { color: var(--bad); }
+
+.metric-sub {
+  display: block;
+  margin-top: 0.3rem;
+  color: var(--mute);
+  font-size: 0.72rem;
+}
+
+.lot-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+@media (max-width: 720px) {
+  .portfolio-metrics .module-metric:nth-child(n + 4) { border-top: 0; }
+}
 </style>

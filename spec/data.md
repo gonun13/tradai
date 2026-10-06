@@ -35,7 +35,8 @@ Referenced by holdings, bars, recommendations, and optionally news tags. Same ta
 
 `GET /portfolio/settings` returns `display_currency`, `display_currency_options`, source-aware
 `cash` and `realized_gains_ytd_override` objects (each including `display_amount`),
-`realized_gains_ytd_from_disposals_display`, `realized_gains_ytd_display`, profiles, and calendar year.
+`realized_gains_ytd_from_disposals_display`, `realized_gains_all_time_from_disposals_display` (`0031`),
+`realized_gains_ytd_display`, profiles, and calendar year.
 `PUT /portfolio/settings` is partial: it accepts `display_currency`, accepts or clears either money
 object, and preserves every omitted money/profile field.
 
@@ -55,6 +56,23 @@ Live read models use currency-neutral names: holdings expose `cost_display`,
 | notes | Optional holding-level notes |
 
 Belongs to the single local portfolio. Source of truth for acquisitions is **Transaction**, not a lone avg_cost field.
+A row exists only while the FIFO open quantity is above zero (`0031`): a full exit removes the rollup,
+never the transactions or disposals, and a later buy re-creates it on the same history.
+`first_trade_date` is the trade date of the oldest **open** lot (held since).
+
+Read model additions (`0031`): `realized_pnl_native`, `realized_pnl_display` (locked EUR converted
+to display) and `total_pnl_display` (`pnl_display + realized_pnl_display`). `GET /holdings` adds
+`summary: { unrealized_pnl_display, realized_ytd_display, realized_all_time_display, total_pnl_display }`;
+any pending constituent makes that figure `null`.
+
+### Closed position (derived, `0031`)
+
+An instrument with transactions and no open holding. `GET /positions/closed` returns per instrument:
+`opened_at` (first buy), `closed_at` (closing sell), `held_days`, `quantity_bought`, `quantity_sold`,
+`cost_native`, `proceeds_native`, `realized_pnl_native`, `realized_pnl_eur`, `realized_pnl_display`,
+`realized_pct`, and `transactions`, summed over the instrument's whole history (re-entries included).
+`DELETE /positions/closed/{instrument_id}` erases its history.
+Closed positions are not part of agent context.
 
 ### Tracker entry
 
@@ -76,14 +94,26 @@ of Tracker input, read models, or advisory context (`0024`).
 | Field (logical) | Notes |
 | --- | --- |
 | instrument_id | FK → Instrument |
-| side | `buy` \| `sell` — MVP records acquisitions as `buy`; sells deferred |
+| side | `buy` \| `sell` — sells are live (`0031`); `POST /holdings/{id}/sells` records one |
 | trade_date | Acquisition / trade calendar date |
 | quantity | Shares/units |
 | unit_price | Price per unit in instrument currency |
 | commission | Fees/costs in instrument currency (≥ 0), **included in cost basis** |
 | notes | Optional |
+| fx_to_eur | Instrument currency → EUR on `trade_date` (`0031`); `1.0` for EUR; `null` until fetched |
+| fx_as_of | Date of the rate Frankfurter returned |
 
 Cost rule: `lot_cost = quantity × unit_price + commission`. See `decisions/0007-acquisition-transactions.md`.
+Sell rule: `proceeds = quantity × unit_price − commission`. Any transaction can be edited or deleted
+(`PUT` / `DELETE /transactions/{id}`); every change re-walks FIFO and an oversold ledger is rejected.
+
+### Realised disposal (derived)
+
+One row per sell transaction, rebuilt from the ledger on every change (`0013`, `0031`): `trade_date`,
+`quantity`, `proceeds`, `cost`, `realized_pnl`, `currency` (native) plus `proceeds_eur`, `cost_eur`,
+`realized_pnl_eur` locked at trade-date FX (buy lots at their own date). EUR fields are `null` while
+any needed trade-date rate is missing. Realised YTD and all-time totals sum `realized_pnl_eur` and
+convert EUR → display at today's rate.
 
 ### PriceBar / Quote
 
@@ -183,9 +213,9 @@ IDs, statuses, effective triggers, and timestamps; it never includes research or
 | instrument_id | FK → Instrument |
 | book | `portfolio` \| `tracker` (`0019`). **Stored, not derived** — a join would mislabel every historical row the moment a tracked name is promoted. Pre-0019 rows default to `portfolio` |
 | action | buy \| sell \| hold \| watch \| drop — **canonical = Jev `combined` lens** (`0009`). `drop` is tracker-only (`0019`) |
-| horizon | Portfolio: `6m` \| `12m` \| `24m`; tracker: `1m` \| `3m` \| `6m` (`0020`). Storage retains all five values for current and historical rows. |
-| reason | **Required.** Sell: `thesis_broken` \| `better_use`. Buy: `thesis_intact_underweight` \| `new_conviction`. Hold/watch: `thesis_intact` \| `insufficient_evidence` (`0013`). Tracker (`0019`): `entry_now` \| `await_better_entry` \| `insufficient_evidence` \| `lost_interest` |
-| loss_gate | `not_at_loss` \| `offset_same_year` \| `no_recovery_24m` \| `blocked` (`0013`). Informational only since `0018`; always null on a tracker row |
+| horizon | Portfolio: `3m` \| `6m` \| `12m` (`0030`; `6m` \| `12m` \| `24m` before it); tracker: `1m` \| `3m` \| `6m` (`0020`). Storage retains all five values for current and historical rows. |
+| reason | **Required.** Sell: `thesis_broken` \| `better_use` \| `take_profit` (`0030`). Buy: `thesis_intact_underweight` \| `new_conviction`. Hold/watch: `thesis_intact` \| `insufficient_evidence` (`0013`). Tracker (`0019`): `entry_now` \| `await_better_entry` \| `insufficient_evidence` \| `lost_interest` |
+| loss_gate | `not_at_loss` \| `offset_same_year` \| `no_recovery_12m` \| `blocked` (`0013`, `0030`; `no_recovery_24m` on pre-0030 rows). Informational only since `0018`; always null on a tracker row |
 | pair_symbol | For `better_use`: the holding or tracked name the proceeds fund. Always null on a tracker row |
 | confidence | Decider confidence, promoted from the Jev blob to a first-class column |
 | suppressed / suppressed_reason | Vestigial. `0018` removed suppression entirely; nothing writes these any more |

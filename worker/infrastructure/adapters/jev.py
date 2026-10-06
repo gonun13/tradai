@@ -29,6 +29,12 @@ PORTFOLIO_CRITERIA: dict[str, str] = {
         "This capital has a specific better use in a named alternative, and the edge "
         "exceeds the switching cost"
     ),
+    # 0030: the portfolio's main job is banking gains.
+    "sell_take_profit": (
+        "The position is at a gain and the remaining upside over this horizon no longer "
+        "justifies keeping the gain at risk: the run is stretched, momentum is fading, the "
+        "catalyst is priced in, or the operator's target is reached. Bank it. Never at a loss"
+    ),
     "hold": "Thesis intact; maintain current size without urgency",
     "watch": "Insufficient evidence to act; monitor closely",
 }
@@ -58,6 +64,7 @@ PORTFOLIO_CRITERIA_SHORT: dict[str, str] = {
     "buy_new_conviction": "add: new evidence",
     "sell_thesis_broken": "sell: falsifier tripped",
     "sell_better_use": "sell: better named use",
+    "sell_take_profit": "sell: take profit",
     "hold": "keep size",
     "watch": "monitor",
 }
@@ -112,10 +119,14 @@ def _lens_focus(lens: str, book: str) -> str:
             "question is whether the reason for owning this still holds."
         ),
         "news": "Use recent headlines and Claude's news note only — ignore price levels and technicals.",
-        "technicals": "Use RSI/SMA/returns and Claude's technical note only — ignore news headlines.",
+        "technicals": (
+            "Use RSI/SMA/returns and Claude's technical note only — ignore news headlines. "
+            "The question is whether the move is still running or is stretched and fading."
+        ),
         "combined": (
             "Weigh the four lens verdicts and layer notes together with full book context "
-            "(sizes, costs, held_days, concentration, cash) for the best overall advisory action."
+            "(sizes, costs, held_days, concentration, cash) for the best overall advisory action. "
+            "For a position at a gain, weigh pnl_pct against the upside left over this horizon."
         ),
     }.get(lens, "Use all available evidence.")
 
@@ -128,12 +139,17 @@ def _book_guidance(book: str) -> str:
             "would survive being wrong. A high price alone is a reason to wait, not to drop; "
             "drop only when the reason for tracking it has actually gone."
         )
+    # 0030: taking profits is the portfolio's main job, alongside the 0013 reasons.
     return (
         "The operator's preference: a sell should be because the investment thesis is broken, "
-        "or because the capital has a specific better named use — not because the price fell. "
-        "Price action, momentum, drawdown depth and concentration are evidence you may reason "
-        "from, but weigh them against the thesis rather than acting on them directly. If you "
-        "can't point to a broken thesis or a better use, prefer hold or watch."
+        "because the capital has a specific better named use, or to take profits on a position "
+        "that is at a gain — never because the price fell. For a position at a gain, the size "
+        "of the gain, a stretched run (high RSI, far above its moving averages), fading "
+        "momentum and a catalyst already priced in are legitimate reasons to take profits; "
+        "weigh them against the operator's take-profit targets in the mandate, and hold a "
+        "winner whose momentum and news are still improving. For a position at a loss, price "
+        "action, momentum, drawdown depth and concentration are evidence to weigh against the "
+        "thesis, not reasons to sell. If none of the three reasons applies, prefer hold or watch."
     )
 
 
